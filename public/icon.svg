@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="100" fill="#171329"/>
+  <rect x="24" y="24" width="464" height="464" rx="80" fill="#201A36" stroke="#292342" stroke-width="8"/>
+  <g transform="translate(106, 106) scale(18.75)">
+    <!-- 16x16 Pixel Art Retro Star Emblem -->
+    <rect x="7" y="1" width="2" height="4" fill="#56E0CB"/>
+    <rect x="7" y="11" width="2" height="4" fill="#56E0CB"/>
+    <rect x="1" y="7" width="4" height="2" fill="#56E0CB"/>
+    <rect x="11" y="7" width="4" height="2" fill="#56E0CB"/>
+    <rect x="5" y="5" width="6" height="6" fill="#FF776E"/>
+    <rect x="6" y="6" width="4" height="4" fill="#171329"/>
+    <rect x="7" y="7" width="2" height="2" fill="#FFC66D"/>
+    <!-- Corner sparkles -->
+    <rect x="3" y="3" width="2" height="2" fill="#FFC66D"/>
+    <rect x="11" y="3" width="2" height="2" fill="#FFC66D"/>
+    <rect x="3" y="11" width="2" height="2" fill="#FFC66D"/>
+    <rect x="11" y="11" width="2" height="2" fill="#FFC66D"/>
+  </g>
+</svg>

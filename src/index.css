@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+@theme {
+  --color-midnight: #171329;
+  --color-arcade-purple: #292342;
+  --color-pixel-coral: #FF776E;
+  --color-electric-teal: #56E0CB;
+  --color-golden-continue: #FFC66D;
+  --color-crt-cream: #FFF0D7;
+
+  --font-pixel: "Press Start 2P", monospace, system-ui;
+  --font-sans: "Space Grotesk", system-ui, -apple-system, sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: #171329;
+  color: #FFF0D7;
+  overflow-x: hidden;
+}
+
+/* Retro Pixel Button & Box Shadow Styles */
+.retro-box-coral {
+  box-shadow: 4px 4px 0px 0px #FF776E;
+}
+
+.retro-box-teal {
+  box-shadow: 4px 4px 0px 0px #56E0CB;
+}
+
+.retro-box-gold {
+  box-shadow: 4px 4px 0px 0px #FFC66D;
+}
+
+.retro-box-purple {
+  box-shadow: 4px 4px 0px 0px rgba(17, 13, 31, 0.8);
+}
+
+.retro-btn {
+  position: relative;
+  transition: all 0.12s ease;
+}
+
+.retro-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0px 0px currentColor;
+}
+
+/* Subtle CRT Grain & Scanline (Restrained, accessible, respectful of reduced motion) */
+.crt-subtle-overlay {
+  background: linear-gradient(
+    rgba(23, 19, 41, 0) 50%, 
+    rgba(10, 7, 20, 0.25) 50%
+  );
+  background-size: 100% 4px;
+  pointer-events: none;
+}
+
+/* Pixel font helper */
+.font-pixel {
+  font-family: "Press Start 2P", monospace;
+  letter-spacing: -0.05em;
+}
+
+/* Focus rings with accessible high contrast */
+*:focus-visible {
+  outline: 2px solid #56E0CB;
+  outline-offset: 3px;
+}

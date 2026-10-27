@@ -1,0 +1,6 @@
+{
+  "name": "Pixel Afterglow",
+  "description": "Old-school joy. New ways to play. A nostalgic, playful browser gaming experience featuring retro pixel aesthetic and classic games.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
