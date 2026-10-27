@@ -18,3 +18,5 @@ View your app in AI Studio: https://ai.studio/apps/1790dc6a-86fa-44ce-a5fa-ed847
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+# pixel-afterglow
+A retro-inspired browser gaming platform built with React, TypeScript, and Vite.
