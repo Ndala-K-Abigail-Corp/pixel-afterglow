@@ -3,7 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { MemoryCard, MemoryStats } from '../types/game';
+import {
+  MemoryCard,
+  MemoryDifficulty,
+  MemoryDifficultyConfig,
+  MemoryGameMode,
+  MemoryGameOutcome,
+  MemoryStats,
+} from '../types/game';
 
 export interface CardSymbolDefinition {
   symbolId: string;
@@ -20,17 +27,54 @@ export const MEMORY_CARD_SYMBOLS: CardSymbolDefinition[] = [
   { symbolId: 'ghost', name: 'Pixel Ghost', color: '#FF8A80' },
   { symbolId: 'key', name: 'Dungeon Key', color: '#FFE082' },
   { symbolId: 'bolt', name: 'Energy Bolt', color: '#80CBC4' },
+  { symbolId: 'crown', name: 'Arcade Crown', color: '#FFD54F' },
+  { symbolId: 'shield', name: 'Pixel Shield', color: '#FF80AB' },
 ];
 
+export const MEMORY_DIFFICULTY_CONFIGS: Record<MemoryDifficulty, MemoryDifficultyConfig> = {
+  easy: {
+    id: 'easy',
+    label: 'Easy',
+    pairs: 6,
+    totalCards: 12,
+    timeLimitSeconds: 90,
+    maxAttempts: 15,
+    description: '6 pairs (12 cards) · Relaxed arcade warmup',
+  },
+  medium: {
+    id: 'medium',
+    label: 'Medium',
+    pairs: 8,
+    totalCards: 16,
+    timeLimitSeconds: 75,
+    maxAttempts: 20,
+    description: '8 pairs (16 cards) · Classic arcade challenge',
+  },
+  hard: {
+    id: 'hard',
+    label: 'Hard',
+    pairs: 10,
+    totalCards: 20,
+    timeLimitSeconds: 60,
+    maxAttempts: 25,
+    description: '10 pairs (20 cards) · High-speed master recall',
+  },
+};
+
+export function getDifficultyConfig(difficulty: MemoryDifficulty): MemoryDifficultyConfig {
+  return MEMORY_DIFFICULTY_CONFIGS[difficulty];
+}
+
 /**
- * Creates 16 cards (8 pairs of 2) from the symbol definitions.
+ * Creates a deck of paired cards for the requested number of pairs (default 8 pairs = 16 cards).
  */
-export function createMemoryDeck(): MemoryCard[] {
+export function createMemoryDeck(pairCount = 8): MemoryCard[] {
+  const clampedPairs = Math.max(1, Math.min(pairCount, MEMORY_CARD_SYMBOLS.length));
+  const selectedSymbols = MEMORY_CARD_SYMBOLS.slice(0, clampedPairs);
   const deck: MemoryCard[] = [];
   let cardId = 0;
 
-  for (const sym of MEMORY_CARD_SYMBOLS) {
-    // Two cards for each symbol
+  for (const sym of selectedSymbols) {
     deck.push({
       id: cardId++,
       symbolId: sym.symbolId,
@@ -67,25 +111,62 @@ export function shuffleDeck(cards: MemoryCard[], randomFn: () => number = Math.r
 }
 
 /**
- * Creates and returns a freshly shuffled new game deck.
+ * Creates and returns a freshly shuffled new game deck for a given difficulty or pair count.
  */
-export function initializeMemoryGame(): MemoryCard[] {
-  return shuffleDeck(createMemoryDeck());
+export function initializeMemoryGame(
+  difficultyOrPairs: MemoryDifficulty | number = 'medium',
+  randomFn: () => number = Math.random
+): MemoryCard[] {
+  const pairCount =
+    typeof difficultyOrPairs === 'number'
+      ? difficultyOrPairs
+      : MEMORY_DIFFICULTY_CONFIGS[difficultyOrPairs].pairs;
+  return shuffleDeck(createMemoryDeck(pairCount), randomFn);
 }
 
 /**
- * Checks if two cards match by symbolId.
+ * Checks if two cards match by symbolId and are distinct card instances.
  */
 export function isPairMatch(cardA: MemoryCard, cardB: MemoryCard): boolean {
   return cardA.symbolId === cardB.symbolId && cardA.id !== cardB.id;
 }
 
 /**
- * Formats seconds into MM:SS display string.
+ * Evaluates the outcome of a Memory Match game after a turn or timer tick.
+ */
+export function evaluateMemoryOutcome(params: {
+  mode: MemoryGameMode;
+  matchedPairs: number;
+  totalPairs: number;
+  remainingSeconds: number;
+  attemptsUsed: number;
+  maxAttempts: number;
+}): MemoryGameOutcome {
+  const { mode, matchedPairs, totalPairs, remainingSeconds, attemptsUsed, maxAttempts } = params;
+
+  // Win takes priority whenever all pairs are matched within allowed limits
+  if (matchedPairs >= totalPairs && totalPairs > 0) {
+    return 'won';
+  }
+
+  if (mode === 'time-challenge' && remainingSeconds <= 0) {
+    return 'lost-time';
+  }
+
+  if (mode === 'limited-moves' && attemptsUsed >= maxAttempts) {
+    return 'lost-moves';
+  }
+
+  return 'playing';
+}
+
+/**
+ * Formats seconds into MM:SS display string (clamped at 0 to prevent negative display).
  */
 export function formatSeconds(totalSeconds: number): string {
-  const mins = Math.floor(totalSeconds / 60);
-  const secs = totalSeconds % 60;
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const mins = Math.floor(safeSeconds / 60);
+  const secs = safeSeconds % 60;
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 

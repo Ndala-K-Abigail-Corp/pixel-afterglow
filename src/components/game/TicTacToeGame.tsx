@@ -203,7 +203,7 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
   const winningIndices: number[] = status.winningLine ? status.winningLine.indices : [];
 
   return (
-    <div className="py-6 px-4 md:px-8 max-w-4xl mx-auto min-h-[calc(100vh-140px)] flex flex-col justify-between">
+    <div className="py-4 sm:py-6 px-4 md:px-8 max-w-4xl mx-auto min-h-[calc(100vh-140px)] flex flex-col justify-between">
       {/* Win celebration particles */}
       {status.isOver && (
         <WinCelebration winner={status.winner} isDraw={status.isDraw} />
@@ -211,21 +211,21 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
 
       {/* Top Navigation & Breadcrumb */}
       <div>
-        <div className="flex items-center justify-between gap-4 mb-6">
+        <div className="flex items-center justify-between gap-2 sm:gap-4 mb-4 sm:mb-6">
           <button
             onClick={() => {
               playClick();
               onBackToHome();
             }}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#292342] hover:bg-[#322B50] text-[#FFF0D7] hover:text-[#56E0CB] border border-[#3D345F] transition-colors text-xs font-semibold focus-visible:ring-2 focus-visible:ring-[#56E0CB]"
+            className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-2 rounded-xl bg-[#292342] hover:bg-[#322B50] text-[#FFF0D7] hover:text-[#56E0CB] border border-[#3D345F] transition-colors text-xs font-semibold focus-visible:ring-2 focus-visible:ring-[#56E0CB]"
             aria-label="Return to arcade collection"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-4 h-4 shrink-0" />
             <span>Back to Arcade</span>
           </button>
 
-          <div className="flex items-center gap-2">
-            <span className="font-pixel text-[10px] text-[#56E0CB] uppercase tracking-wider">
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="font-pixel text-[9px] sm:text-[10px] text-[#56E0CB] uppercase tracking-wider">
               CARTRIDGE #01
             </span>
             <span className="w-2 h-2 rounded-full bg-[#FF776E] animate-pulse" />
@@ -233,11 +233,11 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
         </div>
 
         {/* Game Title & Header */}
-        <div className="text-center mb-5">
-          <h1 className="font-pixel text-xl sm:text-2xl md:text-3xl text-[#FFF0D7] tracking-tight mb-2">
+        <div className="text-center mb-4 sm:mb-5">
+          <h1 className="font-pixel text-lg sm:text-2xl md:text-3xl text-[#FFF0D7] tracking-tight mb-1.5 sm:mb-2">
             TIC-TAC-TOE
           </h1>
-          <p className="text-xs sm:text-sm text-[#FFC66D] font-mono">
+          <p className="text-[11px] sm:text-sm text-[#FFC66D] font-mono">
             {mode === 'pvc'
               ? 'Player vs Computer · Minimax Strategic AI'
               : 'Player vs Player · Local 2-Player Pass & Play'}
@@ -245,93 +245,93 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
         </div>
 
         {/* Game Mode Selector */}
-        <div className="flex items-center justify-center mb-6">
-          <div className="bg-[#201A36] border border-[#3D345F] p-1 rounded-xl flex items-center gap-1 shadow-md">
+        <div className="flex items-center justify-center mb-4 sm:mb-6">
+          <div className="bg-[#201A36] border border-[#3D345F] p-1 rounded-xl flex items-center gap-1 shadow-md w-full max-w-xs sm:w-auto">
             <button
               type="button"
               onClick={() => handleModeChange('pvc')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
                 mode === 'pvc'
                   ? 'bg-[#FF776E] text-[#171329] shadow-sm font-bold'
                   : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
               }`}
               aria-pressed={mode === 'pvc'}
             >
-              <Bot className="w-3.5 h-3.5" />
+              <Bot className="w-3.5 h-3.5 shrink-0" />
               <span>vs Computer</span>
             </button>
 
             <button
               type="button"
               onClick={() => handleModeChange('pvp')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
                 mode === 'pvp'
                   ? 'bg-[#56E0CB] text-[#171329] shadow-sm font-bold'
                   : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
               }`}
               aria-pressed={mode === 'pvp'}
             >
-              <Users className="w-3.5 h-3.5" />
+              <Users className="w-3.5 h-3.5 shrink-0" />
               <span>2-Player Local</span>
             </button>
           </div>
         </div>
 
         {/* Scoreboard Cards */}
-        <div className="grid grid-cols-3 gap-3 sm:gap-4 max-w-lg mx-auto mb-6">
+        <div className="grid grid-cols-3 gap-2 sm:gap-4 max-w-lg mx-auto mb-4 sm:mb-6">
           {/* Player X Score */}
           <div
-            className={`p-3 sm:p-4 rounded-xl text-center border-2 transition-all ${
+            className={`p-2.5 sm:p-4 rounded-xl text-center border-2 transition-all min-w-0 ${
               currentPlayer === 'X' && !status.isOver
-                ? 'bg-[#292342] border-[#FF776E] retro-box-coral scale-105'
+                ? 'bg-[#292342] border-[#FF776E] retro-box-coral sm:scale-105'
                 : 'bg-[#201A36] border-[#3D345F]'
             }`}
           >
-            <div className="text-[10px] font-pixel text-[#FF776E] tracking-wider mb-1">
+            <div className="text-[9px] sm:text-[10px] font-pixel text-[#FF776E] tracking-wider mb-1 truncate">
               {mode === 'pvc' ? 'YOU (X)' : 'PLAYER X'}
             </div>
-            <div className="font-pixel text-xl sm:text-2xl text-[#FFF0D7]">
+            <div className="font-pixel text-lg sm:text-2xl text-[#FFF0D7]">
               {scores.xWins}
             </div>
-            <div className="text-[10px] text-[#FFF0D7]/50 mt-1">WINS</div>
+            <div className="text-[10px] text-[#FFF0D7]/50 mt-0.5 sm:mt-1">WINS</div>
           </div>
 
           {/* Draws Score */}
-          <div className="p-3 sm:p-4 rounded-xl text-center bg-[#201A36] border border-[#3D345F]">
-            <div className="text-[10px] font-pixel text-[#FFC66D] tracking-wider mb-1 flex items-center justify-center gap-1">
-              <Minus className="w-3 h-3 text-[#FFC66D]" />
+          <div className="p-2.5 sm:p-4 rounded-xl text-center bg-[#201A36] border border-[#3D345F] min-w-0">
+            <div className="text-[9px] sm:text-[10px] font-pixel text-[#FFC66D] tracking-wider mb-1 flex items-center justify-center gap-1">
+              <Minus className="w-3 h-3 text-[#FFC66D] shrink-0" />
               <span>DRAWS</span>
             </div>
-            <div className="font-pixel text-xl sm:text-2xl text-[#FFF0D7]">
+            <div className="font-pixel text-lg sm:text-2xl text-[#FFF0D7]">
               {scores.draws}
             </div>
-            <div className="text-[10px] text-[#FFF0D7]/50 mt-1">TIES</div>
+            <div className="text-[10px] text-[#FFF0D7]/50 mt-0.5 sm:mt-1">TIES</div>
           </div>
 
           {/* Player O Score */}
           <div
-            className={`p-3 sm:p-4 rounded-xl text-center border-2 transition-all ${
+            className={`p-2.5 sm:p-4 rounded-xl text-center border-2 transition-all min-w-0 ${
               currentPlayer === 'O' && !status.isOver
-                ? 'bg-[#292342] border-[#56E0CB] retro-box-teal scale-105'
+                ? 'bg-[#292342] border-[#56E0CB] retro-box-teal sm:scale-105'
                 : 'bg-[#201A36] border-[#3D345F]'
             }`}
           >
-            <div className="text-[10px] font-pixel text-[#56E0CB] tracking-wider mb-1">
+            <div className="text-[9px] sm:text-[10px] font-pixel text-[#56E0CB] tracking-wider mb-1 truncate">
               {mode === 'pvc' ? 'CPU (O)' : 'PLAYER O'}
             </div>
-            <div className="font-pixel text-xl sm:text-2xl text-[#FFF0D7]">
+            <div className="font-pixel text-lg sm:text-2xl text-[#FFF0D7]">
               {scores.oWins}
             </div>
-            <div className="text-[10px] text-[#FFF0D7]/50 mt-1">WINS</div>
+            <div className="text-[10px] text-[#FFF0D7]/50 mt-0.5 sm:mt-1">WINS</div>
           </div>
         </div>
 
         {/* Turn & Match Status Banner */}
-        <div className="max-w-md mx-auto mb-6 text-center">
+        <div className="max-w-md mx-auto mb-4 sm:mb-6 text-center">
           {status.isOver ? (
             status.winner ? (
               <div
-                className={`py-3 px-4 rounded-xl border-2 flex items-center justify-center gap-2 animate-pulse ${
+                className={`py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl border-2 flex items-center justify-center gap-2 animate-pulse ${
                   status.winner === 'X'
                     ? 'bg-[#FF776E]/15 border-[#FF776E] text-[#FF776E]'
                     : 'bg-[#56E0CB]/15 border-[#56E0CB] text-[#56E0CB]'
@@ -339,23 +339,23 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
                 role="status"
                 aria-live="polite"
               >
-                <Trophy className="w-4 h-4" />
-                <span className="font-pixel text-xs sm:text-sm">
+                <Trophy className="w-4 h-4 shrink-0" />
+                <span className="font-pixel text-[10px] sm:text-sm leading-snug">
                   {mode === 'pvc'
                     ? status.winner === 'X'
                       ? 'YOU DEFEATED THE COMPUTER!'
                       : 'COMPUTER WINS THIS ROUND!'
                     : `PLAYER ${status.winner} WINS THE ROUND!`}
                 </span>
-                <Sparkles className="w-4 h-4" />
+                <Sparkles className="w-4 h-4 shrink-0" />
               </div>
             ) : (
               <div
-                className="py-3 px-4 rounded-xl border-2 bg-[#FFC66D]/15 border-[#FFC66D] text-[#FFC66D] flex items-center justify-center gap-2"
+                className="py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl border-2 bg-[#FFC66D]/15 border-[#FFC66D] text-[#FFC66D] flex items-center justify-center gap-2"
                 role="status"
                 aria-live="polite"
               >
-                <span className="font-pixel text-xs sm:text-sm">
+                <span className="font-pixel text-[10px] sm:text-sm">
                   IT'S A DRAW! CAT'S GAME!
                 </span>
               </div>
@@ -366,7 +366,7 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
               role="status"
               aria-live="polite"
             >
-              <Cpu className="w-4 h-4 animate-spin text-[#56E0CB]" />
+              <Cpu className="w-4 h-4 animate-spin text-[#56E0CB] shrink-0" />
               <span className="text-xs font-semibold">Computer is calculating next move...</span>
             </div>
           ) : (
@@ -380,7 +380,7 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
               aria-live="polite"
             >
               <span className="text-xs font-semibold mr-2 text-[#FFF0D7]/75">Current Turn:</span>
-              <span className="font-pixel text-xs sm:text-sm uppercase tracking-wide">
+              <span className="font-pixel text-[11px] sm:text-sm uppercase tracking-wide">
                 {mode === 'pvc'
                   ? currentPlayer === 'X'
                     ? 'Your Turn (X)'
@@ -392,13 +392,13 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
         </div>
 
         {/* Responsive 3x3 Board */}
-        <div className="w-full max-w-[340px] sm:max-w-[380px] aspect-square mx-auto bg-[#201A36] border-4 border-[#292342] rounded-2xl p-3 shadow-2xl relative">
+        <div className="w-full max-w-[320px] sm:max-w-[380px] aspect-square mx-auto bg-[#201A36] border-4 border-[#292342] rounded-2xl p-2.5 sm:p-3 shadow-2xl relative">
           {/* Subtle CRT Scanline Layer */}
           <div className="absolute inset-0 crt-subtle-overlay rounded-2xl pointer-events-none opacity-40" />
 
           {/* 3x3 Grid of Accessible Buttons */}
           <div
-            className="grid grid-cols-3 grid-rows-3 gap-2.5 w-full h-full"
+            className="grid grid-cols-3 grid-rows-3 gap-2 sm:gap-2.5 w-full h-full"
             role="grid"
             aria-label="3 by 3 Tic-Tac-Toe Game Board"
           >
@@ -432,7 +432,7 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
                   {/* Placed Token */}
                   {cell === 'X' && (
                     <span
-                      className={`text-3xl sm:text-4xl md:text-5xl font-pixel tracking-tighter ${
+                      className={`text-2xl sm:text-4xl md:text-5xl font-pixel tracking-tighter ${
                         isWinningCell ? 'text-[#FFC66D] scale-110 drop-shadow-[0_0_8px_#FFC66D]' : 'text-[#FF776E]'
                       }`}
                     >
@@ -441,7 +441,7 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
                   )}
                   {cell === 'O' && (
                     <span
-                      className={`text-3xl sm:text-4xl md:text-5xl font-pixel tracking-tighter ${
+                      className={`text-2xl sm:text-4xl md:text-5xl font-pixel tracking-tighter ${
                         isWinningCell ? 'text-[#FFC66D] scale-110 drop-shadow-[0_0_8px_#FFC66D]' : 'text-[#56E0CB]'
                       }`}
                     >
@@ -452,7 +452,7 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
                   {/* Empty Cell Preview Ghost on Hover for Tactile Feedback */}
                   {!isOccupied && !status.isOver && canClick && hoveredCell === index && (
                     <span
-                      className={`text-3xl sm:text-4xl md:text-5xl font-pixel opacity-25 pointer-events-none ${
+                      className={`text-2xl sm:text-4xl md:text-5xl font-pixel opacity-25 pointer-events-none ${
                         currentPlayer === 'X' ? 'text-[#FF776E]' : 'text-[#56E0CB]'
                       }`}
                     >
@@ -467,13 +467,13 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
       </div>
 
       {/* Action Controls & Match Tools */}
-      <div className="max-w-md mx-auto w-full mt-8 pt-4 border-t border-[#292342] flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div className="max-w-md mx-auto w-full mt-6 sm:mt-8 pt-4 border-t border-[#292342] flex flex-col sm:flex-row items-center justify-between gap-3">
         {/* Restart Round Button */}
         <button
           onClick={handleRestartRound}
           className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-[#FF776E] hover:bg-[#ff8f87] text-[#171329] font-bold text-xs uppercase tracking-wider font-pixel retro-btn retro-box-coral focus-visible:ring-2 focus-visible:ring-[#FFF0D7] transition-all"
         >
-          <RotateCcw className="w-4 h-4" />
+          <RotateCcw className="w-4 h-4 shrink-0" />
           <span>{status.isOver ? 'PLAY AGAIN' : 'RESTART ROUND'}</span>
         </button>
 
@@ -483,7 +483,7 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
           className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#201A36] hover:bg-[#292342] text-[#FFF0D7]/75 hover:text-[#FF776E] border border-[#3D345F] hover:border-[#FF776E] text-xs font-medium transition-colors"
           title={`Reset ${mode === 'pvc' ? 'vs Computer' : '2-Player'} scores`}
         >
-          <Trash2 className="w-3.5 h-3.5 text-[#FF776E]" />
+          <Trash2 className="w-3.5 h-3.5 text-[#FF776E] shrink-0" />
           <span>Reset Scores</span>
         </button>
       </div>

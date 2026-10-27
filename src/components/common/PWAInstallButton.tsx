@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Download, Share, X, CheckCircle, Smartphone } from 'lucide-react';
+import { Download, Share, X, Smartphone } from 'lucide-react';
 import { usePWAInstall } from '../../utils/usePWAInstall';
 import { useAudio } from '../../context/AudioContext';
 
@@ -31,12 +31,12 @@ export const PWAInstallButton: React.FC = () => {
     <>
       <button
         onClick={handleClick}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#292342] hover:bg-[#322B50] text-[#56E0CB] border border-[#56E0CB]/40 hover:border-[#56E0CB] transition-all focus-visible:ring-2 focus-visible:ring-[#56E0CB]"
+        className="flex items-center justify-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#292342] hover:bg-[#322B50] text-[#56E0CB] border border-[#56E0CB]/40 hover:border-[#56E0CB] transition-all focus-visible:ring-2 focus-visible:ring-[#56E0CB]"
         title="Install Pixel Afterglow for offline arcade play"
         aria-label="Install Pixel Afterglow application"
       >
-        <Download className="w-3.5 h-3.5 text-[#56E0CB]" />
-        <span className="hidden sm:inline font-mono">INSTALL APP</span>
+        <Download className="w-3.5 h-3.5 text-[#56E0CB] shrink-0" />
+        <span className="hidden md:inline font-mono">INSTALL APP</span>
       </button>
 
       {/* iOS Safari Guided Installation Modal */}
@@ -46,7 +46,7 @@ export const PWAInstallButton: React.FC = () => {
           aria-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in"
         >
-          <div className="relative w-full max-w-sm bg-[#201A36] border-2 border-[#56E0CB] rounded-2xl p-6 shadow-2xl text-[#FFF0D7]">
+          <div className="relative w-full max-w-sm bg-[#201A36] border-2 border-[#56E0CB] rounded-2xl p-5 sm:p-6 shadow-2xl text-[#FFF0D7]">
             <button
               onClick={() => setShowIOSModal(false)}
               className="absolute top-4 right-4 p-1.5 text-[#FFF0D7]/60 hover:text-[#FF776E] rounded-lg"

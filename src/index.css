@@ -16,11 +16,15 @@
   color-scheme: dark;
 }
 
+html,
 body {
   font-family: var(--font-sans);
   background-color: #171329;
   color: #FFF0D7;
   overflow-x: hidden;
+  width: 100%;
+  max-width: 100vw;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Retro Pixel Button & Box Shadow Styles */
@@ -40,14 +44,42 @@ body {
   box-shadow: 4px 4px 0px 0px rgba(17, 13, 31, 0.8);
 }
 
+@media (max-width: 639px) {
+  .retro-box-coral {
+    box-shadow: 3px 3px 0px 0px #FF776E;
+  }
+  .retro-box-teal {
+    box-shadow: 3px 3px 0px 0px #56E0CB;
+  }
+  .retro-box-gold {
+    box-shadow: 3px 3px 0px 0px #FFC66D;
+  }
+  .retro-box-purple {
+    box-shadow: 3px 3px 0px 0px rgba(17, 13, 31, 0.8);
+  }
+}
+
 .retro-btn {
   position: relative;
   transition: all 0.12s ease;
+  touch-action: manipulation;
 }
 
 .retro-btn:active:not(:disabled) {
   transform: translate(2px, 2px);
   box-shadow: 2px 2px 0px 0px currentColor;
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Subtle CRT Grain & Scanline (Restrained, accessible, respectful of reduced motion) */
@@ -64,6 +96,7 @@ body {
 .font-pixel {
   font-family: "Press Start 2P", monospace;
   letter-spacing: -0.05em;
+  overflow-wrap: break-word;
 }
 
 /* Focus rings with accessible high contrast */

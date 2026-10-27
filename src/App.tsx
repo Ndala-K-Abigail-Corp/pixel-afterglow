@@ -50,7 +50,7 @@ export default function App() {
 
   return (
     <AudioProvider>
-      <div className="min-h-screen bg-[#171329] text-[#FFF0D7] flex flex-col font-sans selection:bg-[#FF776E] selection:text-[#171329]">
+      <div className="min-h-screen w-full max-w-full overflow-x-clip bg-[#171329] text-[#FFF0D7] flex flex-col font-sans selection:bg-[#FF776E] selection:text-[#171329]">
         {/* Navigation Bar */}
         <Navbar
           currentView={currentView}
@@ -60,7 +60,7 @@ export default function App() {
         />
 
         {/* Main View Area */}
-        <main className="flex-1">
+        <main className="flex-1 w-full max-w-full">
           {currentView === 'home' && (
             <>
               <Hero onLetsPlay={handleScrollToGames} />

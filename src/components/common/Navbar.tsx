@@ -26,17 +26,17 @@ export const Navbar: React.FC<NavbarProps> = ({
   const { isMuted, toggleMute } = useAudio();
 
   return (
-    <header className="sticky top-0 z-40 bg-[#171329]/95 backdrop-blur-md border-b border-[#292342] px-4 md:px-8 py-3.5 transition-colors">
-      <div className="max-w-6xl mx-auto flex items-center justify-between gap-3 sm:gap-4">
+    <header className="sticky top-0 z-40 w-full bg-[#171329]/95 backdrop-blur-md border-b border-[#292342] px-3 sm:px-6 md:px-8 py-2.5 sm:py-3.5 transition-colors">
+      <div className="max-w-6xl mx-auto flex items-center justify-between gap-2 sm:gap-4">
         {/* Brand Wordmark & Pixel Icon */}
         <button
           onClick={onNavigateHome}
-          className="flex items-center gap-3 text-left group focus-visible:ring-2 focus-visible:ring-[#56E0CB] rounded-lg p-1 transition-transform"
+          className="flex items-center gap-2 sm:gap-3 text-left group focus-visible:ring-2 focus-visible:ring-[#56E0CB] rounded-lg p-1 transition-transform min-w-0 shrink"
           aria-label="Pixel Afterglow Homepage"
         >
           {/* Custom Pixel Retro Badge */}
-          <div className="w-9 h-9 rounded-lg bg-[#292342] border-2 border-[#56E0CB] flex items-center justify-center text-[#56E0CB] group-hover:border-[#FF776E] group-hover:text-[#FF776E] transition-colors shadow-sm shrink-0">
-            <svg viewBox="0 0 16 16" className="w-5 h-5" fill="currentColor">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-[#292342] border-2 border-[#56E0CB] flex items-center justify-center text-[#56E0CB] group-hover:border-[#FF776E] group-hover:text-[#FF776E] transition-colors shadow-sm shrink-0">
+            <svg viewBox="0 0 16 16" className="w-4 h-4 sm:w-5 sm:h-5" fill="currentColor">
               {/* Retro 8-bit star/gem mark */}
               <rect x="7" y="1" width="2" height="4" />
               <rect x="7" y="11" width="2" height="4" />
@@ -48,8 +48,8 @@ export const Navbar: React.FC<NavbarProps> = ({
             </svg>
           </div>
 
-          <div>
-            <span className="font-pixel text-xs sm:text-sm text-[#FFF0D7] tracking-tight group-hover:text-[#FFC66D] transition-colors block leading-none">
+          <div className="min-w-0">
+            <span className="font-pixel text-[10px] sm:text-xs md:text-sm text-[#FFF0D7] tracking-tight group-hover:text-[#FFC66D] transition-colors block leading-[1.35] sm:leading-none">
               PIXEL AFTERGLOW
             </span>
             <span className="text-[11px] text-[#56E0CB] font-medium tracking-wide hidden sm:block mt-1 font-sans">
@@ -59,26 +59,26 @@ export const Navbar: React.FC<NavbarProps> = ({
         </button>
 
         {/* Navigation Items & Controls */}
-        <nav className="flex items-center gap-1.5 sm:gap-3" aria-label="Main Navigation">
+        <nav className="flex items-center gap-1 sm:gap-2.5 shrink-0" aria-label="Main Navigation">
           {/* Games link */}
           <button
             onClick={onOpenGames}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+            className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium transition-colors ${
               currentView === 'home'
                 ? 'text-[#FFF0D7] hover:text-[#56E0CB] hover:bg-[#292342]'
                 : 'text-[#FFF0D7] hover:text-[#56E0CB] bg-[#292342]/60 hover:bg-[#292342]'
             }`}
           >
-            <Gamepad2 className="w-4 h-4 text-[#56E0CB]" />
+            <Gamepad2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#56E0CB] shrink-0" />
             <span>Games</span>
           </button>
 
           {/* About link */}
           <button
             onClick={onOpenAbout}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium text-[#FFF0D7] hover:text-[#FFC66D] hover:bg-[#292342] transition-colors"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium text-[#FFF0D7] hover:text-[#FFC66D] hover:bg-[#292342] transition-colors"
           >
-            <Info className="w-4 h-4 text-[#FFC66D]" />
+            <Info className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#FFC66D] shrink-0" />
             <span>About</span>
           </button>
 
@@ -88,7 +88,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Sound Mute/Unmute Toggle Button */}
           <button
             onClick={toggleMute}
-            className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+            className={`flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
               isMuted
                 ? 'bg-[#292342] text-[#FFF0D7]/75 border-[#3D345F] hover:text-[#FFF0D7] hover:border-[#56E0CB]'
                 : 'bg-[#56E0CB]/15 text-[#56E0CB] border-[#56E0CB] shadow-sm'
@@ -99,13 +99,13 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             {isMuted ? (
               <>
-                <VolumeX className="w-4 h-4 text-[#FF776E]" />
-                <span className="hidden sm:inline font-mono">MUTED</span>
+                <VolumeX className="w-4 h-4 text-[#FF776E] shrink-0" />
+                <span className="hidden md:inline font-mono">MUTED</span>
               </>
             ) : (
               <>
-                <Volume2 className="w-4 h-4 text-[#56E0CB] animate-pulse" />
-                <span className="hidden sm:inline font-mono">SFX ON</span>
+                <Volume2 className="w-4 h-4 text-[#56E0CB] animate-pulse shrink-0" />
+                <span className="hidden md:inline font-mono">SFX ON</span>
               </>
             )}
           </button>

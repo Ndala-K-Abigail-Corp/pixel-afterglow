@@ -11,28 +11,28 @@ export const HeroPixelScene: React.FC = () => {
       {/* Outer ambient glow */}
       <div 
         aria-hidden="true" 
-        className="absolute -inset-4 bg-gradient-to-r from-[#FF776E]/20 via-[#56E0CB]/20 to-[#FFC66D]/20 blur-2xl opacity-70 rounded-3xl pointer-events-none" 
+        className="absolute -inset-2 sm:-inset-4 bg-gradient-to-r from-[#FF776E]/20 via-[#56E0CB]/20 to-[#FFC66D]/20 blur-2xl opacity-70 rounded-3xl pointer-events-none" 
       />
 
       {/* Retro Arcade Machine Art */}
-      <div className="relative w-full bg-[#201A36] border-2 border-[#3D345F] rounded-2xl p-5 md:p-6 shadow-2xl retro-box-coral">
+      <div className="relative w-full bg-[#201A36] border-2 border-[#3D345F] rounded-2xl p-3.5 sm:p-5 md:p-6 shadow-2xl retro-box-coral">
         {/* Arcade Marquee Header */}
-        <div className="bg-[#292342] border border-[#56E0CB]/40 rounded-lg p-2.5 mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#FF776E] animate-pulse" />
-            <span className="w-2.5 h-2.5 rounded-full bg-[#FFC66D]" />
-            <span className="w-2.5 h-2.5 rounded-full bg-[#56E0CB]" />
+        <div className="bg-[#292342] border border-[#56E0CB]/40 rounded-lg p-2 sm:p-2.5 mb-3 sm:mb-4 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-[#FF776E] animate-pulse" />
+            <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-[#FFC66D]" />
+            <span className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-[#56E0CB]" />
           </div>
-          <span className="font-pixel text-[10px] md:text-xs text-[#FFC66D] tracking-wider uppercase">
+          <span className="font-pixel text-[8px] sm:text-[10px] md:text-xs text-[#FFC66D] tracking-wider uppercase truncate">
             ARCADE UNIT 1994
           </span>
-          <span className="font-pixel text-[9px] text-[#56E0CB] bg-[#171329] px-2 py-0.5 rounded border border-[#56E0CB]/30">
+          <span className="font-pixel text-[8px] sm:text-[9px] text-[#56E0CB] bg-[#171329] px-1.5 sm:px-2 py-0.5 rounded border border-[#56E0CB]/30 shrink-0 whitespace-nowrap">
             HI-SCORE 99990
           </span>
         </div>
 
         {/* CRT Screen Display */}
-        <div className="relative bg-[#171329] border-4 border-[#292342] rounded-xl overflow-hidden p-4 min-h-[220px] md:min-h-[260px] flex flex-col items-center justify-center">
+        <div className="relative bg-[#171329] border-4 border-[#292342] rounded-xl overflow-hidden p-2.5 sm:p-4 min-h-[190px] sm:min-h-[220px] md:min-h-[260px] flex flex-col items-center justify-center">
           {/* Subtle CRT Screen Scanlines */}
           <div className="absolute inset-0 crt-subtle-overlay pointer-events-none z-10" />
 
@@ -145,10 +145,10 @@ export const HeroPixelScene: React.FC = () => {
         </div>
 
         {/* Physical Arcade Control Deck Panel */}
-        <div className="mt-4 pt-3 border-t border-[#3D345F] flex items-center justify-between px-2">
+        <div className="mt-3 sm:mt-4 pt-3 border-t border-[#3D345F] flex items-center justify-between px-1 sm:px-2 gap-2">
           {/* Joystick Art */}
-          <div className="flex items-center gap-3">
-            <div className="relative w-8 h-8 flex items-center justify-center">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="relative w-8 h-8 flex items-center justify-center shrink-0">
               <div className="w-8 h-8 rounded-full bg-[#171329] border border-[#3D345F]" />
               <div className="absolute w-2 h-4 bg-[#6A5E95] bottom-3 rounded-t-sm" />
               <div className="absolute top-0 w-4 h-4 rounded-full bg-[#FF776E] shadow-sm retro-box-coral" />
@@ -176,7 +176,7 @@ export const HeroPixelScene: React.FC = () => {
           </div>
 
           {/* Coin Slot */}
-          <div className="border border-[#FFC66D]/40 bg-[#171329] px-2.5 py-1 rounded text-right">
+          <div className="border border-[#FFC66D]/40 bg-[#171329] px-2 sm:px-2.5 py-1 rounded text-right shrink-0">
             <div className="w-6 h-1 bg-[#FFC66D] mx-auto mb-1 rounded-sm opacity-80" />
             <span className="font-pixel text-[8px] text-[#FFC66D]">FREE PLAY</span>
           </div>

@@ -44,6 +44,20 @@ export interface GameMetadata {
   category: string;
 }
 
+export type MemoryGameMode = 'time-challenge' | 'limited-moves';
+export type MemoryDifficulty = 'easy' | 'medium' | 'hard';
+export type MemoryGameOutcome = 'playing' | 'won' | 'lost-time' | 'lost-moves';
+
+export interface MemoryDifficultyConfig {
+  id: MemoryDifficulty;
+  label: string;
+  pairs: number;
+  totalCards: number;
+  timeLimitSeconds: number;
+  maxAttempts: number;
+  description: string;
+}
+
 export interface MemoryCard {
   id: number;
   symbolId: string;
