@@ -46,4 +46,54 @@ export const GAMES_CATALOG: GameMetadata[] = [
     accentColor: '#56E0CB', // Electric Teal
     category: 'Word Puzzle',
   },
+  {
+    id: 'brick-breaker',
+    title: 'Brick Breaker',
+    tagline: 'Shatter neon pixel walls with precision ricochets',
+    description: 'Classic arcade game involving a bouncing ball, paddle, and breakable bricks.',
+    status: 'coming-soon',
+    badge: 'Coming Soon',
+    accentColor: '#FF776E', // Pixel Coral
+    category: 'Arcade Action',
+  },
+  {
+    id: 'whack-a-mole',
+    title: 'Whack-a-Mole',
+    tagline: 'Fast-fingered arcade reflex test',
+    description: 'A quick-reaction game where players tap targets as they appear.',
+    status: 'coming-soon',
+    badge: 'Coming Soon',
+    accentColor: '#FFC66D', // Golden Continue
+    category: 'Reflex Arcade',
+  },
+  {
+    id: 'space-shooter',
+    title: 'Space Shooter',
+    tagline: 'Defend the star sector against pixel invaders',
+    description: 'A retro space arcade game featuring a spaceship, enemies, and projectiles.',
+    status: 'coming-soon',
+    badge: 'Coming Soon',
+    accentColor: '#56E0CB', // Electric Teal
+    category: 'Space Arcade',
+  },
+  {
+    id: 'hangman',
+    title: 'Hangman',
+    tagline: 'Save your pixel hero one letter at a time',
+    description: 'A word-guessing game where players reveal a hidden word by guessing letters.',
+    status: 'coming-soon',
+    badge: 'Coming Soon',
+    accentColor: '#FF776E', // Pixel Coral
+    category: 'Word Puzzle',
+  },
+  {
+    id: 'letter-rush',
+    title: 'Letter Rush',
+    tagline: 'Beat the clock across fast-fire word categories',
+    description: 'A category-based word game where players receive a random letter and enter words beginning with that letter, such as names, countries, foods, animals, and objects.',
+    status: 'coming-soon',
+    badge: 'Coming Soon',
+    accentColor: '#FFC66D', // Golden Continue
+    category: 'Word Blitz',
+  },
 ];

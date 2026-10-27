@@ -14,7 +14,7 @@ interface FooterProps {
 
 export const Footer: React.FC<FooterProps> = ({
   onOpenAbout,
-  githubRepoUrl = 'https://github.com/your-username/pixel-afterglow',
+  githubRepoUrl = 'https://github.com/Ndala-K-Abigail-Corp/pixel-afterglow',
 }) => {
   return (
     <footer className="mt-20 border-t border-[#292342] bg-[#171329] text-[#FFF0D7] py-12 px-4 md:px-8">

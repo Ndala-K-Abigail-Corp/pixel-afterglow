@@ -11,6 +11,11 @@ import {
   MemoryMatchArt,
   SnakeArt,
   WordGuessArt,
+  BrickBreakerArt,
+  WhackAMoleArt,
+  SpaceShooterArt,
+  HangmanArt,
+  LetterRushArt,
 } from '../pixel-art/GameThumbnails';
 import { useAudio } from '../../context/AudioContext';
 
@@ -34,6 +39,16 @@ export const GameCard: React.FC<GameCardProps> = ({ game, onPlay }) => {
         return <SnakeArt />;
       case 'word-guessing':
         return <WordGuessArt />;
+      case 'brick-breaker':
+        return <BrickBreakerArt />;
+      case 'whack-a-mole':
+        return <WhackAMoleArt />;
+      case 'space-shooter':
+        return <SpaceShooterArt />;
+      case 'hangman':
+        return <HangmanArt />;
+      case 'letter-rush':
+        return <LetterRushArt />;
       default:
         return null;
     }

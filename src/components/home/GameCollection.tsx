@@ -50,10 +50,12 @@ export const GameCollection: React.FC<GameCollectionProps> = ({ onPlayGame }) =>
             <span>UPCOMING CARTRIDGES</span>
             <span className="text-[10px] text-[#FFF0D7]/50 font-sans font-normal">(In Pipeline)</span>
           </h3>
-          <span className="text-[11px] sm:text-xs text-[#FFF0D7]/50 font-mono">2 TITLES IN QUEUE</span>
+          <span className="text-[11px] sm:text-xs text-[#FFF0D7]/50 font-mono">
+            {upcomingGames.length} TITLES IN QUEUE
+          </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 max-w-3xl">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {upcomingGames.map((game) => (
             <GameCard key={game.id} game={game} onPlay={onPlayGame} featured={false} />
           ))}
