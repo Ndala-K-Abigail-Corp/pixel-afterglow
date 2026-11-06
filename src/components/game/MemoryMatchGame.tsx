@@ -17,6 +17,8 @@ import {
   AlertTriangle,
   Layers,
   Timer,
+  Globe,
+  User,
 } from 'lucide-react';
 import {
   MemoryCard,
@@ -37,108 +39,23 @@ import {
 } from '../../logic/memoryMatch';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
+import { loadActiveRoomSession } from '../../logic/multiplayerRoom';
+import { MemoryMatchMultiplayerView } from './MemoryMatchMultiplayerView';
+import { MemorySymbolIcon } from './MemorySymbolIcon';
 import { useAudio } from '../../context/AudioContext';
 
 interface MemoryMatchGameProps {
   onBackToHome: () => void;
 }
 
-/**
- * Render custom cohesive retro pixel SVG icons for all 10 card symbols
- */
-const MemorySymbolIcon: React.FC<{ symbolId: string; color: string; className?: string }> = ({
-  symbolId,
-  color,
-  className = 'w-8 h-8',
-}) => {
-  switch (symbolId) {
-    case 'heart':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M3 2h3v2H3z M10 2h3v2h-3z M2 4h12v3H2z M3 7h10v2H3z M4 9h8v2H4z M5 11h6v2H5z M7 13h2v2H7z" />
-          <rect x="4" y="4" width="2" height="2" fill="#FFF0D7" opacity="0.8" />
-        </svg>
-      );
-    case 'gem':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M5 2h6v2H5z M3 4h10v2H3z M2 6h12v2H2z M3 8h10v2H3z M5 10h6v2H5z M7 12h2v2H7z" />
-          <rect x="5" y="4" width="2" height="2" fill="#FFF0D7" />
-        </svg>
-      );
-    case 'star':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M7 1h2v3H7z M3 5h10v2H3z M5 7h6v2H5z M4 9h8v2H4z M2 11h4v2H2z M10 11h4v2h-4z M1 13h3v2H1z M12 13h3v2h-3z" />
-          <rect x="7" y="5" width="2" height="2" fill="#FFF0D7" />
-        </svg>
-      );
-    case 'potion':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M6 1h4v2H6z M7 3h2v3H7z M4 6h8v2H4z M3 8h10v6H3z M5 14h6v2H5z" />
-          <rect x="5" y="9" width="2" height="2" fill="#FFF0D7" opacity="0.8" />
-          <rect x="8" y="11" width="2" height="2" fill="#FFF0D7" opacity="0.6" />
-        </svg>
-      );
-    case 'gamepad':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M2 4h12v8H2z M1 5h1v6H1z M14 5h1v6h-1z" />
-          <rect x="4" y="6" width="3" height="1" fill="#171329" />
-          <rect x="5" y="5" width="1" height="3" fill="#171329" />
-          <rect x="10" y="6" width="1" height="1" fill="#171329" />
-          <rect x="12" y="7" width="1" height="1" fill="#171329" />
-        </svg>
-      );
-    case 'ghost':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M5 1h6v2H5z M3 3h10v9H3z M2 5h12v7H2z M3 14h2v1H3z M7 14h2v1H7z M11 14h2v1h-2z" />
-          <rect x="5" y="6" width="2" height="2" fill="#171329" />
-          <rect x="9" y="6" width="2" height="2" fill="#171329" />
-        </svg>
-      );
-    case 'key':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M10 2h4v4h-4z M11 3h2v2h-2z M7 5h4v2H7z M3 7h5v2H3z M4 9h2v2H4z M7 9h2v2H7z" />
-        </svg>
-      );
-    case 'bolt':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M8 1h3v4H8z M6 5h5v2H6z M4 7h6v2H4z M2 9h6v2H2z M4 11h3v2H4z M5 13h2v2H5z" />
-          <rect x="7" y="6" width="2" height="2" fill="#FFF0D7" />
-        </svg>
-      );
-    case 'crown':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M2 4h2v3h2V4h4v3h2V4h2v8H2z M3 13h10v1H3z" />
-          <rect x="4" y="8" width="2" height="2" fill="#FF776E" />
-          <rect x="7" y="7" width="2" height="2" fill="#56E0CB" />
-          <rect x="10" y="8" width="2" height="2" fill="#FF776E" />
-        </svg>
-      );
-    case 'shield':
-      return (
-        <svg viewBox="0 0 16 16" className={className} fill={color} aria-hidden="true">
-          <path d="M3 2h10v6H3z M4 8h8v3H4z M6 11h4v2H6z M7 13h2v2H7z" />
-          <rect x="7" y="4" width="2" height="7" fill="#FFF0D7" opacity="0.85" />
-          <rect x="5" y="6" width="6" height="2" fill="#FFF0D7" opacity="0.85" />
-        </svg>
-      );
-    default:
-      return null;
-  }
-};
-
 export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }) => {
   const { playFlip, playMatch, playMismatch, playWin, playDraw, playReset, playClick } = useAudio();
 
   // Screen phase: 'setup' lets user pick Mode & Difficulty; 'playing' renders the active board
   const [phase, setPhase] = useState<'setup' | 'playing'>('setup');
+  const [isOnlineMultiplayer, setIsOnlineMultiplayer] = useState<boolean>(() =>
+    Boolean(loadActiveRoomSession('memory-match'))
+  );
   const [mode, setMode] = useState<MemoryGameMode>('time-challenge');
   const [difficulty, setDifficulty] = useState<MemoryDifficulty>('medium');
 
@@ -594,11 +511,58 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
             MEMORY MATCH
           </h1>
           <p className="text-xs sm:text-sm text-[#FFF0D7]/80 max-w-lg mx-auto leading-relaxed">
-            Flip retro arcade cards two at a time to uncover matching pixel pairs. Choose your challenge mode and board size below.
+            {isOnlineMultiplayer
+              ? 'Compete in real time with 2–4 players on a shared 20, 40, or 60-card arcade board.'
+              : 'Flip retro arcade cards two at a time to uncover matching pixel pairs. Choose your challenge mode and board size below.'}
           </p>
+
+          {/* Single Player vs Online Multiplayer Selector */}
+          <div className="flex items-center justify-center mt-4">
+            <div className="bg-[#201A36] border border-[#3D345F] p-1 rounded-xl inline-flex items-center gap-1 shadow-md">
+              <button
+                type="button"
+                onClick={() => {
+                  playClick();
+                  setIsOnlineMultiplayer(false);
+                }}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  !isOnlineMultiplayer
+                    ? 'bg-[#56E0CB] text-[#171329] font-bold shadow-sm'
+                    : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
+                }`}
+                aria-pressed={!isOnlineMultiplayer}
+                data-testid="memory-mode-single"
+              >
+                <User className="w-3.5 h-3.5 shrink-0" />
+                <span>Single Player</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  playClick();
+                  setIsOnlineMultiplayer(true);
+                }}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  isOnlineMultiplayer
+                    ? 'bg-[#FFC66D] text-[#171329] font-bold shadow-sm'
+                    : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
+                }`}
+                aria-pressed={isOnlineMultiplayer}
+                data-testid="memory-mode-online"
+              >
+                <Globe className="w-3.5 h-3.5 shrink-0" />
+                <span>Online Multiplayer (2–4P)</span>
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* Step 1: Select Game Mode */}
+        {isOnlineMultiplayer ? (
+          <MemoryMatchMultiplayerView onBackToHome={onBackToHome} />
+        ) : (
+          <>
+            {/* Step 1: Select Game Mode */}
         <div className="mb-6 sm:mb-8">
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-pixel text-[10px] sm:text-xs text-[#56E0CB] uppercase tracking-wider">
@@ -784,6 +748,8 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
             <span>Start Game</span>
           </button>
         </div>
+          </>
+        )}
       </div>
     );
   }
