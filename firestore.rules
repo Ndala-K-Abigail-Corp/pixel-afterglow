@@ -1,0 +1,313 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isRoomMember(roomData) {
+      return isSignedIn() && (request.auth.uid in roomData.players);
+    }
+
+    function isRoomHost(roomData) {
+      return isSignedIn() && roomData.hostUid == request.auth.uid;
+    }
+
+    function isValidTransition(fromStatus, toStatus) {
+      return (fromStatus == toStatus)
+        || (fromStatus == 'waiting' && toStatus in ['in_progress', 'closed', 'expired'])
+        || (fromStatus == 'in_progress' && toStatus in ['completed', 'closed', 'expired'])
+        || (fromStatus == 'completed' && toStatus in ['in_progress', 'closed', 'expired'])
+        || (fromStatus == 'closed' && toStatus == 'expired');
+    }
+
+    function immutableFieldsUnchanged() {
+      return request.resource.data.roomCode == resource.data.roomCode
+        && request.resource.data.gameType == resource.data.gameType
+        && request.resource.data.hostUid == resource.data.hostUid
+        && request.resource.data.maxPlayers == resource.data.maxPlayers
+        && request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    // Ensures only the authenticated caller's own player entry is modified,
+    // and their identity (uid), host role (isHost), join time, and symbol remain unchanged.
+    function onlyCallerPlayerModified() {
+      return (request.auth.uid in resource.data.players)
+        && (request.auth.uid in request.resource.data.players)
+        && request.resource.data.players.diff(resource.data.players).addedKeys().size() == 0
+        && request.resource.data.players.diff(resource.data.players).removedKeys().size() == 0
+        && request.resource.data.players.diff(resource.data.players).changedKeys().hasOnly([request.auth.uid])
+        && request.resource.data.players[request.auth.uid].uid == resource.data.players[request.auth.uid].uid
+        && request.resource.data.players[request.auth.uid].isHost == resource.data.players[request.auth.uid].isHost
+        && request.resource.data.players[request.auth.uid].joinedAt == resource.data.players[request.auth.uid].joinedAt
+        && request.resource.data.players[request.auth.uid].symbol == resource.data.players[request.auth.uid].symbol;
+    }
+
+    // Ensures only the caller's player entry changed (e.g. heartbeat/rematch vote) and their score did not change.
+    function callerScoreUnchanged() {
+      return onlyCallerPlayerModified()
+        && request.resource.data.players[request.auth.uid].score == resource.data.players[request.auth.uid].score;
+    }
+
+    // Validates a new guest joining a waiting room without modifying existing players or claiming host role.
+    function isValidWaitingRoomJoin() {
+      return !(request.auth.uid in resource.data.players)
+        && (request.auth.uid in request.resource.data.players)
+        && request.resource.data.players.diff(resource.data.players).addedKeys().hasOnly([request.auth.uid])
+        && request.resource.data.players.diff(resource.data.players).removedKeys().size() == 0
+        && request.resource.data.players.diff(resource.data.players).changedKeys().size() == 0
+        && request.resource.data.players[request.auth.uid].uid == request.auth.uid
+        && request.resource.data.players[request.auth.uid].isHost == false
+        && request.resource.data.players[request.auth.uid].score == 0
+        && request.resource.data.players[request.auth.uid].rematchAccepted == false
+        && request.resource.data.playerOrder.size() == resource.data.playerOrder.size() + 1
+        && request.resource.data.playerOrder.size() <= resource.data.maxPlayers
+        && (request.auth.uid in request.resource.data.playerOrder);
+    }
+
+    // Validates a guest leaving a waiting room (removing only their own player entry).
+    function isValidWaitingRoomLeave() {
+      return (request.auth.uid in resource.data.players)
+        && !isRoomHost(resource.data)
+        && !(request.auth.uid in request.resource.data.players)
+        && request.resource.data.players.diff(resource.data.players).addedKeys().size() == 0
+        && request.resource.data.players.diff(resource.data.players).removedKeys().hasOnly([request.auth.uid])
+        && request.resource.data.players.diff(resource.data.players).changedKeys().size() == 0
+        && request.resource.data.playerOrder.size() == resource.data.playerOrder.size() - 1
+        && !(request.auth.uid in request.resource.data.playerOrder);
+    }
+
+    // Enforces that Memory Match matchedPairs increases by at most 1 per move,
+    // existing matched-pair ownership in matchedByPairKey can never be removed or overwritten,
+    // and any newly matched pair is owned by request.auth.uid.
+    function isValidMemoryMatchPairOwnershipDiff() {
+      let prevMM = resource.data.memoryMatchState;
+      let nextMM = request.resource.data.memoryMatchState;
+      let pairDelta = nextMM.matchedPairs - prevMM.matchedPairs;
+      let ownerDiff = nextMM.matchedByPairKey.diff(prevMM.matchedByPairKey);
+      return pairDelta >= 0
+        && pairDelta <= 1
+        && ownerDiff.removedKeys().size() == 0
+        && ownerDiff.changedKeys().size() == 0
+        && ownerDiff.addedKeys().size() == pairDelta
+        && (
+          pairDelta == 0
+          || (
+            nextMM.lastMatchedPairKey != null
+            && ownerDiff.addedKeys().hasOnly([nextMM.lastMatchedPairKey])
+            && nextMM.matchedByPairKey[nextMM.lastMatchedPairKey] == request.auth.uid
+          )
+        );
+    }
+
+    // Validates an active-turn player move in Memory Match.
+    function isValidMemoryMatchTurnMove() {
+      let prevMM = resource.data.memoryMatchState;
+      let nextMM = request.resource.data.memoryMatchState;
+      let pairDelta = nextMM.matchedPairs - prevMM.matchedPairs;
+      return resource.data.gameType == 'memory-match'
+        && prevMM != null
+        && nextMM != null
+        && request.resource.data.ticTacToeState == resource.data.ticTacToeState
+        && nextMM.totalPairs == prevMM.totalPairs
+        && nextMM.turnOrderUids == prevMM.turnOrderUids
+        && nextMM.cards.size() == prevMM.cards.size()
+        && isValidMemoryMatchPairOwnershipDiff()
+        && onlyCallerPlayerModified()
+        && request.resource.data.players[request.auth.uid].score == resource.data.players[request.auth.uid].score + pairDelta;
+    }
+
+    // Validates an active-turn player move in Tic-Tac-Toe.
+    function isValidTicTacToeTurnMove() {
+      let prevTTT = resource.data.ticTacToeState;
+      let nextTTT = request.resource.data.ticTacToeState;
+      let scoreDelta = request.resource.data.players[request.auth.uid].score - resource.data.players[request.auth.uid].score;
+      return resource.data.gameType == 'tic-tac-toe'
+        && prevTTT != null
+        && nextTTT != null
+        && request.resource.data.memoryMatchState == resource.data.memoryMatchState
+        && nextTTT.playerXUid == prevTTT.playerXUid
+        && nextTTT.playerOUid == prevTTT.playerOUid
+        && nextTTT.roundNumber == prevTTT.roundNumber
+        && nextTTT.board.size() == 9
+        && onlyCallerPlayerModified()
+        && scoreDelta >= 0
+        && scoreDelta <= 1
+        && (scoreDelta == 0 || request.resource.data.status == 'completed');
+    }
+
+    // Restricts mismatch-reset operations strictly to turning mismatched cards face down and advancing turn.
+    // Prevents any changes to player scores, matchedPairs, or matched-card ownership.
+    function isValidMismatchReset() {
+      let prevMM = resource.data.memoryMatchState;
+      let nextMM = request.resource.data.memoryMatchState;
+      return resource.data.gameType == 'memory-match'
+        && request.resource.data.status == 'in_progress'
+        && prevMM != null
+        && nextMM != null
+        && prevMM.pendingResetAt != null
+        && prevMM.flippedCardIds.size() == 2
+        && request.resource.data.players == resource.data.players
+        && request.resource.data.ticTacToeState == resource.data.ticTacToeState
+        && nextMM.diff(prevMM).affectedKeys().hasOnly([
+          'cards',
+          'lastMatchedPairKey',
+          'currentTurnIndex',
+          'currentTurnUid',
+          'flippedCardIds',
+          'pendingResetAt'
+        ])
+        && nextMM.totalPairs == prevMM.totalPairs
+        && nextMM.matchedPairs == prevMM.matchedPairs
+        && nextMM.matchedByPairKey == prevMM.matchedByPairKey
+        && nextMM.turnOrderUids == prevMM.turnOrderUids
+        && nextMM.winnerUids == prevMM.winnerUids
+        && nextMM.isTie == prevMM.isTie
+        && nextMM.flippedCardIds.size() == 0
+        && nextMM.pendingResetAt == null
+        && request.resource.data.currentTurnUid == nextMM.currentTurnUid
+        && (request.resource.data.currentTurnUid in resource.data.playerOrder);
+    }
+
+    match /rooms/{roomCode} {
+      // Authenticated players may read room state to join by code or listen to active room updates
+      allow read: if isSignedIn();
+
+      // Room creation: creator must be authenticated, set themselves as host, and start in 'waiting'
+      allow create: if isSignedIn()
+        && request.resource.data.roomCode == roomCode
+        && request.resource.data.hostUid == request.auth.uid
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.gameType in ['tic-tac-toe', 'memory-match']
+        && request.resource.data.maxPlayers in [2, 3, 4]
+        && (request.auth.uid in request.resource.data.players)
+        && request.resource.data.players[request.auth.uid].uid == request.auth.uid
+        && request.resource.data.players[request.auth.uid].isHost == true
+        && request.resource.data.players[request.auth.uid].score == 0
+        && request.resource.data.playerOrder.size() == 1
+        && request.resource.data.playerOrder[0] == request.auth.uid;
+
+      // Room updates: enforce state machine, host permissions, capacity limits, turn locks, and ownership immutability
+      allow update: if isSignedIn()
+        && immutableFieldsUnchanged()
+        && isValidTransition(resource.data.status, request.resource.data.status)
+        && !(resource.data.status in ['closed', 'expired'])
+        && (
+          // 1. Marking a room expired is only permitted once its expiresAt timestamp has elapsed
+          (
+            request.resource.data.status == 'expired'
+            && request.time.toMillis() >= resource.data.expiresAt
+          )
+          ||
+          // 2. Host closing the room
+          (
+            request.resource.data.status == 'closed'
+            && isRoomHost(resource.data)
+            && request.resource.data.playerOrder == resource.data.playerOrder
+          )
+          ||
+          // 3. Joining, leaving, or updating own connection heartbeat while in 'waiting'
+          (
+            resource.data.status == 'waiting'
+            && request.resource.data.status == 'waiting'
+            && request.resource.data.ticTacToeState == null
+            && request.resource.data.memoryMatchState == null
+            && (
+              isValidWaitingRoomJoin()
+              || (
+                callerScoreUnchanged()
+                && request.resource.data.playerOrder == resource.data.playerOrder
+              )
+              || isValidWaitingRoomLeave()
+            )
+          )
+          ||
+          // 4. Host starting the game once required player count is reached
+          (
+            resource.data.status == 'waiting'
+            && request.resource.data.status == 'in_progress'
+            && isRoomHost(resource.data)
+            && resource.data.playerOrder.size() == resource.data.maxPlayers
+            && request.resource.data.playerOrder == resource.data.playerOrder
+            && request.resource.data.players.diff(resource.data.players).addedKeys().size() == 0
+            && request.resource.data.players.diff(resource.data.players).removedKeys().size() == 0
+            && request.resource.data.currentTurnUid == resource.data.playerOrder[0]
+            && (
+              resource.data.gameType != 'memory-match'
+              || (
+                request.resource.data.memoryMatchState != null
+                && request.resource.data.memoryMatchState.matchedPairs == 0
+                && request.resource.data.memoryMatchState.matchedByPairKey.size() == 0
+                && request.resource.data.memoryMatchState.turnOrderUids == resource.data.playerOrder
+              )
+            )
+          )
+          ||
+          // 5. Active gameplay updates (turn-validated moves, self-scoped heartbeats, or mismatch resets)
+          (
+            resource.data.status == 'in_progress'
+            && request.resource.data.status in ['in_progress', 'completed']
+            && isRoomMember(resource.data)
+            && request.resource.data.playerOrder == resource.data.playerOrder
+            && (
+              // 5a. Active turn player making a validated move
+              (
+                resource.data.currentTurnUid == request.auth.uid
+                && (isValidMemoryMatchTurnMove() || isValidTicTacToeTurnMove())
+              )
+              ||
+              // 5b. Member updating only their own connection status / heartbeat
+              (
+                request.resource.data.status == 'in_progress'
+                && request.resource.data.currentTurnUid == resource.data.currentTurnUid
+                && request.resource.data.ticTacToeState == resource.data.ticTacToeState
+                && request.resource.data.memoryMatchState == resource.data.memoryMatchState
+                && callerScoreUnchanged()
+              )
+              ||
+              // 5c. Resolving a revealed mismatch pair without altering scores or matched pairs
+              isValidMismatchReset()
+            )
+          )
+          ||
+          // 6. Post-game rematch voting by members or rematch initiation by host
+          (
+            resource.data.status == 'completed'
+            && isRoomMember(resource.data)
+            && request.resource.data.playerOrder == resource.data.playerOrder
+            && (
+              (
+                request.resource.data.status == 'completed'
+                && request.resource.data.ticTacToeState == resource.data.ticTacToeState
+                && request.resource.data.memoryMatchState == resource.data.memoryMatchState
+                && callerScoreUnchanged()
+              )
+              ||
+              (
+                request.resource.data.status == 'in_progress'
+                && isRoomHost(resource.data)
+                && request.resource.data.players.diff(resource.data.players).addedKeys().size() == 0
+                && request.resource.data.players.diff(resource.data.players).removedKeys().size() == 0
+              )
+            )
+          )
+        );
+
+      // Room cleanup/deletion allowed by host or once room is closed/expired
+      allow delete: if isSignedIn()
+        && (
+          isRoomHost(resource.data)
+          || resource.data.status in ['closed', 'expired']
+          || request.time.toMillis() >= resource.data.expiresAt
+          || resource.data.playerOrder.size() == 0
+        );
+    }
+
+    // Deny all other collections by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

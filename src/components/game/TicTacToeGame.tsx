@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ArrowLeft, RotateCcw, Trash2, Trophy, Minus, Sparkles, Users, Bot, Cpu } from 'lucide-react';
+import { ArrowLeft, RotateCcw, Trash2, Trophy, Minus, Sparkles, Users, Bot, Cpu, Globe } from 'lucide-react';
 import { Player, BoardState, TicTacToeScores, TicTacToeMode } from '../../types/game';
 import {
   createEmptyBoard,
@@ -17,6 +17,8 @@ import {
   saveScores,
   clearStoredScores,
 } from '../../logic/ticTacToe';
+import { loadActiveRoomSession } from '../../logic/multiplayerRoom';
+import { TicTacToeMultiplayerView } from './TicTacToeMultiplayerView';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
 import { useAudio } from '../../context/AudioContext';
@@ -28,6 +30,9 @@ interface TicTacToeGameProps {
 export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) => {
   const { playMove, playWin, playDraw, playReset, playClick } = useAudio();
   const [mode, setMode] = useState<TicTacToeMode>('pvc'); // Player vs Computer by default or PvP
+  const [isOnlineMultiplayer, setIsOnlineMultiplayer] = useState<boolean>(() =>
+    Boolean(loadActiveRoomSession('tic-tac-toe'))
+  );
   const [board, setBoard] = useState<BoardState>(createEmptyBoard);
   const [currentPlayer, setCurrentPlayer] = useState<Player>('X');
   const [scores, setScores] = useState<TicTacToeScores>(() => loadScores('pvc'));
@@ -178,7 +183,8 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
 
   // Switch game mode
   const handleModeChange = (newMode: TicTacToeMode) => {
-    if (newMode === mode) return;
+    setIsOnlineMultiplayer(false);
+    if (newMode === mode && !isOnlineMultiplayer) return;
     setIsCelebrationOpen(false);
     playClick();
     roundIdRef.current += 1;
@@ -193,6 +199,19 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
     setScores(loadScores(newMode));
   };
 
+  const handleSelectOnlineMultiplayer = () => {
+    if (isOnlineMultiplayer) return;
+    setIsCelebrationOpen(false);
+    playClick();
+    roundIdRef.current += 1;
+    if (aiTimeoutRef.current) {
+      clearTimeout(aiTimeoutRef.current);
+      aiTimeoutRef.current = null;
+    }
+    setIsAiThinking(false);
+    setIsOnlineMultiplayer(true);
+  };
+
   // Reset stored scores for current mode
   const handleResetScores = useCallback(() => {
     playReset();
@@ -205,7 +224,7 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
   return (
     <div className="py-4 sm:py-6 px-4 md:px-8 max-w-4xl mx-auto min-h-[calc(100vh-140px)] flex flex-col justify-between">
       {/* Win celebration particles */}
-      {status.isOver && (
+      {!isOnlineMultiplayer && status.isOver && (
         <WinCelebration winner={status.winner} isDraw={status.isDraw} />
       )}
 
@@ -238,7 +257,9 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
             TIC-TAC-TOE
           </h1>
           <p className="text-[11px] sm:text-sm text-[#FFC66D] font-mono">
-            {mode === 'pvc'
+            {isOnlineMultiplayer
+              ? 'Online Multiplayer · Real-Time 2-Player Room Duel'
+              : mode === 'pvc'
               ? 'Player vs Computer · Minimax Strategic AI'
               : 'Player vs Player · Local 2-Player Pass & Play'}
           </p>
@@ -246,16 +267,16 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
 
         {/* Game Mode Selector */}
         <div className="flex items-center justify-center mb-4 sm:mb-6">
-          <div className="bg-[#201A36] border border-[#3D345F] p-1 rounded-xl flex items-center gap-1 shadow-md w-full max-w-xs sm:w-auto">
+          <div className="bg-[#201A36] border border-[#3D345F] p-1 rounded-xl flex flex-wrap items-center justify-center gap-1 shadow-md w-full max-w-md sm:w-auto">
             <button
               type="button"
               onClick={() => handleModeChange('pvc')}
-              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
-                mode === 'pvc'
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                !isOnlineMultiplayer && mode === 'pvc'
                   ? 'bg-[#FF776E] text-[#171329] shadow-sm font-bold'
                   : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
               }`}
-              aria-pressed={mode === 'pvc'}
+              aria-pressed={!isOnlineMultiplayer && mode === 'pvc'}
             >
               <Bot className="w-3.5 h-3.5 shrink-0" />
               <span>vs Computer</span>
@@ -264,20 +285,39 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
             <button
               type="button"
               onClick={() => handleModeChange('pvp')}
-              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
-                mode === 'pvp'
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                !isOnlineMultiplayer && mode === 'pvp'
                   ? 'bg-[#56E0CB] text-[#171329] shadow-sm font-bold'
                   : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
               }`}
-              aria-pressed={mode === 'pvp'}
+              aria-pressed={!isOnlineMultiplayer && mode === 'pvp'}
             >
               <Users className="w-3.5 h-3.5 shrink-0" />
               <span>2-Player Local</span>
             </button>
+
+            <button
+              type="button"
+              onClick={handleSelectOnlineMultiplayer}
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                isOnlineMultiplayer
+                  ? 'bg-[#FFC66D] text-[#171329] shadow-sm font-bold'
+                  : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
+              }`}
+              aria-pressed={isOnlineMultiplayer}
+              data-testid="tictactoe-mode-online"
+            >
+              <Globe className="w-3.5 h-3.5 shrink-0" />
+              <span>Online Multiplayer</span>
+            </button>
           </div>
         </div>
 
-        {/* Scoreboard Cards */}
+        {isOnlineMultiplayer ? (
+          <TicTacToeMultiplayerView onBackToHome={onBackToHome} />
+        ) : (
+          <>
+            {/* Scoreboard Cards */}
         <div className="grid grid-cols-3 gap-2 sm:gap-4 max-w-lg mx-auto mb-4 sm:mb-6">
           {/* Player X Score */}
           <div
@@ -464,63 +504,69 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
             })}
           </div>
         </div>
+          </>
+        )}
       </div>
 
-      {/* Action Controls & Match Tools */}
-      <div className="max-w-md mx-auto w-full mt-6 sm:mt-8 pt-4 border-t border-[#292342] flex flex-col sm:flex-row items-center justify-between gap-3">
-        {/* Restart Round Button */}
-        <button
-          onClick={handleRestartRound}
-          className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-[#FF776E] hover:bg-[#ff8f87] text-[#171329] font-bold text-xs uppercase tracking-wider font-pixel retro-btn retro-box-coral focus-visible:ring-2 focus-visible:ring-[#FFF0D7] transition-all"
-        >
-          <RotateCcw className="w-4 h-4 shrink-0" />
-          <span>{status.isOver ? 'PLAY AGAIN' : 'RESTART ROUND'}</span>
-        </button>
+      {!isOnlineMultiplayer && (
+        <>
+          {/* Action Controls & Match Tools */}
+          <div className="max-w-md mx-auto w-full mt-6 sm:mt-8 pt-4 border-t border-[#292342] flex flex-col sm:flex-row items-center justify-between gap-3">
+            {/* Restart Round Button */}
+            <button
+              onClick={handleRestartRound}
+              className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-[#FF776E] hover:bg-[#ff8f87] text-[#171329] font-bold text-xs uppercase tracking-wider font-pixel retro-btn retro-box-coral focus-visible:ring-2 focus-visible:ring-[#FFF0D7] transition-all"
+            >
+              <RotateCcw className="w-4 h-4 shrink-0" />
+              <span>{status.isOver ? 'PLAY AGAIN' : 'RESTART ROUND'}</span>
+            </button>
 
-        {/* Reset Stored Scores Button */}
-        <button
-          onClick={handleResetScores}
-          className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#201A36] hover:bg-[#292342] text-[#FFF0D7]/75 hover:text-[#FF776E] border border-[#3D345F] hover:border-[#FF776E] text-xs font-medium transition-colors"
-          title={`Reset ${mode === 'pvc' ? 'vs Computer' : '2-Player'} scores`}
-        >
-          <Trash2 className="w-3.5 h-3.5 text-[#FF776E] shrink-0" />
-          <span>Reset Scores</span>
-        </button>
-      </div>
+            {/* Reset Stored Scores Button */}
+            <button
+              onClick={handleResetScores}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#201A36] hover:bg-[#292342] text-[#FFF0D7]/75 hover:text-[#FF776E] border border-[#3D345F] hover:border-[#FF776E] text-xs font-medium transition-colors"
+              title={`Reset ${mode === 'pvc' ? 'vs Computer' : '2-Player'} scores`}
+            >
+              <Trash2 className="w-3.5 h-3.5 text-[#FF776E] shrink-0" />
+              <span>Reset Scores</span>
+            </button>
+          </div>
 
-      {/* Victory Celebration Modal */}
-      <VictoryCelebrationModal
-        isOpen={isCelebrationOpen && status.isOver && status.winner !== null}
-        onClose={() => setIsCelebrationOpen(false)}
-        onPlayAgain={() => {
-          setIsCelebrationOpen(false);
-          handleRestartRound();
-        }}
-        onBackToArcade={() => {
-          setIsCelebrationOpen(false);
-          onBackToHome();
-        }}
-        gameTitle="TIC-TAC-TOE"
-        headline={
-          mode === 'pvc'
-            ? status.winner === 'X'
-              ? 'YOU DEFEATED THE COMPUTER!'
-              : 'COMPUTER WON THIS ROUND!'
-            : `PLAYER ${status.winner} WINS!`
-        }
-        subheadline={
-          mode === 'pvc'
-            ? status.winner === 'X'
-              ? 'Tactical genius broke the Minimax machine!'
-              : 'The Minimax engine found the winning line!'
-            : 'Three-in-a-row claimed the arcade crown!'
-        }
-        stats={[
-          { label: 'MODE', value: mode === 'pvc' ? 'vs CPU' : '2-Player', accent: '#FFC66D' },
-          { label: 'X WINS', value: scores.xWins, accent: '#FF776E' },
-          { label: 'O WINS', value: scores.oWins, accent: '#56E0CB' },
-        ]}
-      />
+          {/* Victory Celebration Modal */}
+          <VictoryCelebrationModal
+            isOpen={isCelebrationOpen && status.isOver && status.winner !== null}
+            onClose={() => setIsCelebrationOpen(false)}
+            onPlayAgain={() => {
+              setIsCelebrationOpen(false);
+              handleRestartRound();
+            }}
+            onBackToArcade={() => {
+              setIsCelebrationOpen(false);
+              onBackToHome();
+            }}
+            gameTitle="TIC-TAC-TOE"
+            headline={
+              mode === 'pvc'
+                ? status.winner === 'X'
+                  ? 'YOU DEFEATED THE COMPUTER!'
+                  : 'COMPUTER WON THIS ROUND!'
+                : `PLAYER ${status.winner} WINS!`
+            }
+            subheadline={
+              mode === 'pvc'
+                ? status.winner === 'X'
+                  ? 'Tactical genius broke the Minimax machine!'
+                  : 'The Minimax engine found the winning line!'
+                : 'Three-in-a-row claimed the arcade crown!'
+            }
+            stats={[
+              { label: 'MODE', value: mode === 'pvc' ? 'vs CPU' : '2-Player', accent: '#FFC66D' },
+              { label: 'X WINS', value: scores.xWins, accent: '#FF776E' },
+              { label: 'O WINS', value: scores.oWins, accent: '#56E0CB' },
+            ]}
+          />
+        </>
+      )}
     </div>
   );
 };
