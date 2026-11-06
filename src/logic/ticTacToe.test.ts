@@ -37,10 +37,22 @@ globalThis.localStorage = {
 } as unknown as Storage;
 
 describe('Tic-Tac-Toe Pure Logic', () => {
-  it('creates an empty 9-cell board', () => {
+  it('creates an empty 9-cell board and resets cleanly after a finished match', () => {
     const board = createEmptyBoard();
     expect(board).toHaveLength(9);
     expect(board.every((c) => c === null)).toBe(true);
+
+    // Play a winning sequence for X, then reset board
+    let active = makeMove(board, 0, 'X');
+    active = makeMove(active, 3, 'O');
+    active = makeMove(active, 1, 'X');
+    active = makeMove(active, 4, 'O');
+    active = makeMove(active, 2, 'X');
+    expect(evaluateBoard(active).isOver).toBe(true);
+
+    const resetBoard = createEmptyBoard();
+    expect(resetBoard.every((c) => c === null)).toBe(true);
+    expect(evaluateBoard(resetBoard).isOver).toBe(false);
   });
 
   it('validates moves correctly', () => {
@@ -78,6 +90,10 @@ describe('Tic-Tac-Toe Pure Logic', () => {
   });
 
   describe('Winner detection for all 8 winning lines', () => {
+    it('defines all 8 standard winning lines (3 rows, 3 cols, 2 diagonals)', () => {
+      expect(WINNING_LINES).toHaveLength(8);
+    });
+
     // Rows
     it('detects row 1 win', () => {
       const board: BoardState = ['X', 'X', 'X', 'O', 'O', null, null, null, null];
@@ -147,9 +163,6 @@ describe('Tic-Tac-Toe Pure Logic', () => {
   });
 
   it('detects a draw when all cells filled and no winner', () => {
-    // X O X
-    // X O O
-    // O X X
     const board: BoardState = [
       'X', 'O', 'X',
       'X', 'O', 'O',
@@ -173,10 +186,8 @@ describe('Tic-Tac-Toe Pure Logic', () => {
     expect(result.isDraw).toBe(false);
   });
 
-  describe('Computer Opponent (AI Minimax)', () => {
+  describe('Computer Opponent (AI Minimax & Easy modes)', () => {
     it('AI immediately takes a winning move when available', () => {
-      // O has [0, 1], can win at index 2
-      // X has [3, 4]
       const board: BoardState = [
         'O', 'O', null,
         'X', 'X', null,
@@ -187,7 +198,6 @@ describe('Tic-Tac-Toe Pure Logic', () => {
     });
 
     it('AI blocks an immediate human winning threat', () => {
-      // X has [0, 1] threat, O must block at index 2
       const board: BoardState = [
         'X', 'X', null,
         null, 'O', null,
@@ -198,28 +208,31 @@ describe('Tic-Tac-Toe Pure Logic', () => {
     });
 
     it('AI blocks diagonal threat', () => {
-      // X has [0, 4], O must block at index 8
       const board: BoardState = [
         'X', null, null,
         null, 'X', null,
         null, null, null,
       ];
-      // Note: O's optimal move will take center if available, but here 4 is taken, so 8 or another corner
       const move = getComputerMove(board, 'unbeatable');
       expect(move).toBeGreaterThanOrEqual(0);
       expect(move).toBeLessThanOrEqual(8);
       expect(board[move]).toBeNull();
     });
 
-    it('AI always picks a legal move', () => {
+    it('AI always picks a legal move in both easy and unbeatable modes and returns -1 on full board', () => {
       const board: BoardState = [
         'X', 'O', 'X',
         'X', 'O', null,
         'O', 'X', null,
       ];
-      const move = getComputerMove(board, 'unbeatable');
-      expect([5, 8]).toContain(move);
-      expect(board[move]).toBeNull();
+      const unbeatableMove = getComputerMove(board, 'unbeatable');
+      expect([5, 8]).toContain(unbeatableMove);
+
+      const casualMove = getComputerMove(board, 'casual');
+      expect([5, 8]).toContain(casualMove);
+
+      const fullBoard: BoardState = ['X', 'O', 'X', 'X', 'O', 'O', 'O', 'X', 'X'];
+      expect(getComputerMove(fullBoard, 'unbeatable')).toBe(-1);
     });
   });
 
