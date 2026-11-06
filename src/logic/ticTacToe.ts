@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { BoardState, CellValue, GameStatus, Player, TicTacToeMode, TicTacToeScores, WinningLine } from '../types/game';
+import { BoardState, GameStatus, Player, TicTacToeMode, TicTacToeScores } from '../types/game';
 
 export const WINNING_LINES: Array<{ indices: [number, number, number]; direction: 'row' | 'col' | 'diag-main' | 'diag-anti'; lineIndex: number }> = [
   // Rows

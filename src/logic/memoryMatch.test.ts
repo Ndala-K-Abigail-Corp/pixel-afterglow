@@ -1,9 +1,12 @@
+// @vitest-environment jsdom
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from 'vitest';
+import React from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import {
   createMemoryDeck,
   shuffleDeck,
@@ -17,23 +20,13 @@ import {
   clearMemoryStats,
   MEMORY_CARD_SYMBOLS,
 } from './memoryMatch';
+import { MemoryMatchGame } from '../components/game/MemoryMatchGame';
+import { AudioProvider } from '../context/AudioContext';
 
-// Mock storage for Node runner
-const memoryMockStore: Record<string, string> = {};
-globalThis.localStorage = {
-  getItem: (k: string) => memoryMockStore[k] || null,
-  setItem: (k: string, v: string) => {
-    memoryMockStore[k] = String(v);
-  },
-  removeItem: (k: string) => {
-    delete memoryMockStore[k];
-  },
-  clear: () => {
-    for (const k in memoryMockStore) delete memoryMockStore[k];
-  },
-  length: 0,
-  key: () => null,
-} as unknown as Storage;
+// Mock canvas-confetti so tests run cleanly in headless jsdom
+vi.mock('canvas-confetti', () => ({
+  default: vi.fn(),
+}));
 
 describe('Memory Match Pure Logic', () => {
   it('defines 10 distinct symbols to support up to Hard (10 pairs)', () => {
@@ -84,12 +77,19 @@ describe('Memory Match Pure Logic', () => {
 
   it('shuffles the deck without losing or corrupting cards', () => {
     const deck = createMemoryDeck(8);
-    const shuffled = shuffleDeck(deck);
+    // Deterministic non-identity random generator
+    let seed = 1;
+    const pseudoRandom = () => {
+      seed = (seed * 16807) % 2147483647;
+      return (seed - 1) / 2147483646;
+    };
+    const shuffled = shuffleDeck(deck, pseudoRandom);
     expect(shuffled).toHaveLength(16);
 
-    const originalIds = deck.map((c) => c.id).sort((a, b) => a - b);
-    const shuffledIds = shuffled.map((c) => c.id).sort((a, b) => a - b);
-    expect(shuffledIds).toEqual(originalIds);
+    const originalIds = deck.map((c) => c.id);
+    const shuffledIds = shuffled.map((c) => c.id);
+    expect(shuffledIds).not.toEqual(originalIds);
+    expect([...shuffledIds].sort((a, b) => a - b)).toEqual(originalIds);
   });
 
   it('correctly validates matching pairs and rejects same-card selection', () => {
@@ -104,7 +104,6 @@ describe('Memory Match Pure Logic', () => {
   });
 
   it('evaluates Time Challenge win and loss states accurately', () => {
-    // Still playing
     expect(
       evaluateMemoryOutcome({
         mode: 'time-challenge',
@@ -116,7 +115,6 @@ describe('Memory Match Pure Logic', () => {
       })
     ).toBe('playing');
 
-    // Time ran out before matching all pairs -> lost-time
     expect(
       evaluateMemoryOutcome({
         mode: 'time-challenge',
@@ -128,7 +126,6 @@ describe('Memory Match Pure Logic', () => {
       })
     ).toBe('lost-time');
 
-    // All pairs matched before time expires -> won
     expect(
       evaluateMemoryOutcome({
         mode: 'time-challenge',
@@ -142,19 +139,18 @@ describe('Memory Match Pure Logic', () => {
   });
 
   it('evaluates Limited Moves win and loss states accurately', () => {
-    // Still playing with attempts remaining
     expect(
       evaluateMemoryOutcome({
         mode: 'limited-moves',
         matchedPairs: 5,
         totalPairs: 6,
         remainingSeconds: 0,
+        attemptsSeconds: 0,
         attemptsUsed: 14,
         maxAttempts: 15,
-      })
+      } as Parameters<typeof evaluateMemoryOutcome>[0])
     ).toBe('playing');
 
-    // Final attempt matches the last pair -> won
     expect(
       evaluateMemoryOutcome({
         mode: 'limited-moves',
@@ -166,7 +162,6 @@ describe('Memory Match Pure Logic', () => {
       })
     ).toBe('won');
 
-    // Attempts exhausted with pairs remaining -> lost-moves
     expect(
       evaluateMemoryOutcome({
         mode: 'limited-moves',
@@ -203,5 +198,137 @@ describe('Memory Match Pure Logic', () => {
     expect(record2.bestTime).toBe(45);
     expect(record2.bestMoves).toBe(12);
     expect(record2.gamesPlayed).toBe(2);
+  });
+});
+
+describe('Memory Match Interactive Gameplay & Fake Timer Tests', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('starts Time Challenge countdown only after flipping the first card and triggers loss at 00:00', () => {
+    render(
+      React.createElement(
+        AudioProvider,
+        null,
+        React.createElement(MemoryMatchGame, { onBackToHome: vi.fn() })
+      )
+    );
+
+    // Select Easy (90s = 01:30) and start game
+    fireEvent.click(screen.getByRole('radio', { name: /Easy/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start Game/i }));
+
+    // Before first card flip, advancing time does NOT decrement the countdown
+    expect(screen.getByLabelText('Remaining time 01:30')).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByLabelText('Remaining time 01:30')).toBeTruthy();
+
+    // Flip first card -> starts the countdown
+    const cards = screen.getAllByRole('gridcell');
+    expect(cards).toHaveLength(12);
+    fireEvent.click(cards[0]);
+
+    act(() => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(screen.getByLabelText('Remaining time 01:20')).toBeTruthy();
+
+    // Advance remaining 80 seconds to expire timer -> triggers loss and clamps at 00:00
+    act(() => {
+      vi.advanceTimersByTime(85000);
+    });
+    expect(screen.getByLabelText('Remaining time 00:00')).toBeTruthy();
+    expect(screen.getByText(/TIME'S UP! GAME OVER/i)).toBeTruthy();
+  });
+
+  it('resolves mismatched cards after 750ms delay, blocks a third card during lock, and counts 1 attempt per pair', () => {
+    // Force Math.random to return 0 so Fisher-Yates shifts elements deterministically:
+    // For createMemoryDeck(6): [A, A, B, B, C, C, D, D, E, E, F, F]
+    // With Math.random() = 0, index 0 and index 1 have DIFFERENT symbols!
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    render(
+      React.createElement(
+        AudioProvider,
+        null,
+        React.createElement(MemoryMatchGame, { onBackToHome: vi.fn() })
+      )
+    );
+
+    // Switch to Limited Moves + Easy (15 attempts, 12 cards)
+    fireEvent.click(screen.getByRole('radio', { name: /Limited Moves/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /Easy/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start Game/i }));
+
+    expect(screen.getByLabelText('15 attempts remaining')).toBeTruthy();
+
+    const cards = screen.getAllByRole('gridcell');
+    // Flip card 0 and card 1 (which are a mismatch when Math.random() === 0)
+    fireEvent.click(cards[0]);
+    // Selecting only 1 card does not consume an attempt yet
+    expect(screen.getByLabelText('15 attempts remaining')).toBeTruthy();
+
+    fireEvent.click(cards[1]);
+    // Selecting the 2nd card consumes 1 attempt (14 remaining)
+    expect(screen.getByLabelText('14 attempts remaining')).toBeTruthy();
+
+    // While mismatch is being resolved (< 750ms), clicking a 3rd card is blocked
+    fireEvent.click(cards[2]);
+    expect(cards[2].getAttribute('aria-pressed')).toBe('false');
+
+    // After 750ms, both mismatched cards flip back face down
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
+    expect(cards[0].getAttribute('aria-pressed')).toBe('false');
+    expect(cards[1].getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('supports restarting and switching between Time Challenge and Limited Moves', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    render(
+      React.createElement(
+        AudioProvider,
+        null,
+        React.createElement(MemoryMatchGame, { onBackToHome: vi.fn() })
+      )
+    );
+
+    // Start in Limited Moves · Medium (8 pairs = 16 cards, 20 attempts)
+    fireEvent.click(screen.getByRole('radio', { name: /Limited Moves/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start Game/i }));
+
+    const cards = screen.getAllByRole('gridcell');
+    expect(cards).toHaveLength(16);
+    expect(screen.getByLabelText('20 attempts remaining')).toBeTruthy();
+
+    // Make 1 attempt
+    fireEvent.click(cards[0]);
+    fireEvent.click(cards[1]);
+    expect(screen.getByLabelText('19 attempts remaining')).toBeTruthy();
+
+    // Click Restart & Shuffle -> resets attempts back to 20
+    fireEvent.click(screen.getByRole('button', { name: /Restart & Shuffle/i }));
+    expect(screen.getByLabelText('20 attempts remaining')).toBeTruthy();
+
+    // Return to Setup (no progress made since restart) and switch to Time Challenge · Hard (20 cards)
+    fireEvent.click(screen.getByRole('button', { name: /Change Mode \/ Difficulty/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /Time Challenge/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /Hard/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start Game/i }));
+
+    expect(screen.getAllByRole('gridcell')).toHaveLength(20);
+    expect(screen.getByLabelText('Remaining time 01:00')).toBeTruthy();
   });
 });
