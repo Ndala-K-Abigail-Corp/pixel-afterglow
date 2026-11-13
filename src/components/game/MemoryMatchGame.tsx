@@ -62,6 +62,7 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
         hasRoomInvitationInUrl('memory-match')
     )
   );
+  const [isMultiplayerBoardActive, setIsMultiplayerBoardActive] = useState<boolean>(false);
   const [mode, setMode] = useState<MemoryGameMode>('time-challenge');
   const [difficulty, setDifficulty] = useState<MemoryDifficulty>('medium');
 
@@ -483,89 +484,109 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
         } ${totalPairs - matchedPairsCount === 1 ? 'pair' : 'pairs'} still unmatched.`;
 
   // ============================================================================
-  // RENDER 1: SETUP SCREEN (Mode & Difficulty Selection)
+  // RENDER 1: SETUP SCREEN (Mode & Difficulty Selection) OR ONLINE MULTIPLAYER
   // ============================================================================
   if (phase === 'setup') {
+    const isCompactOnlineBoard = isOnlineMultiplayer && isMultiplayerBoardActive;
+
     return (
-      <div className="py-4 sm:py-8 px-3 sm:px-6 md:px-8 max-w-4xl mx-auto">
+      <div
+        className={
+          isCompactOnlineBoard
+            ? 'py-2 sm:py-5 px-2 sm:px-6 md:px-8 max-w-5xl mx-auto'
+            : 'py-4 sm:py-8 px-3 sm:px-6 md:px-8 max-w-4xl mx-auto'
+        }
+      >
         {/* Top Navigation Bar */}
-        <div className="flex items-center justify-between gap-2 mb-5 sm:mb-8">
+        <div
+          className={`flex items-center justify-between gap-2 ${
+            isCompactOnlineBoard ? 'mb-2 sm:mb-4' : 'mb-5 sm:mb-8'
+          }`}
+        >
           <button
             type="button"
             onClick={() => {
               playClick();
               onBackToHome();
             }}
-            className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-2 rounded-xl bg-[#292342] hover:bg-[#322B50] text-[#FFF0D7] hover:text-[#56E0CB] border border-[#3D345F] transition-colors text-xs font-semibold cursor-pointer"
+            className={`flex items-center gap-1.5 sm:gap-2 rounded-xl bg-[#292342] hover:bg-[#322B50] text-[#FFF0D7] hover:text-[#56E0CB] border border-[#3D345F] transition-colors text-xs font-semibold cursor-pointer ${
+              isCompactOnlineBoard ? 'px-2.5 sm:px-3.5 py-1.5 sm:py-2' : 'px-3 sm:px-3.5 py-2'
+            }`}
             aria-label="Return to arcade collection"
           >
-            <ArrowLeft className="w-4 h-4 shrink-0" />
+            <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
             <span>Back to Arcade</span>
           </button>
 
           <div className="flex items-center gap-2 shrink-0">
             <span className="font-pixel text-[9px] sm:text-[10px] text-[#56E0CB] uppercase tracking-wider">
-              CARTRIDGE #02
+              {isCompactOnlineBoard ? 'MEMORY MATCH · ONLINE' : 'CARTRIDGE #02'}
             </span>
             <span className="w-2 h-2 rounded-full bg-[#56E0CB] motion-safe:animate-pulse" />
           </div>
         </div>
 
-        {/* Game Title & Intro */}
-        <div className="text-center mb-6 sm:mb-8">
-          <h1 className="font-pixel text-lg sm:text-2xl md:text-3xl text-[#FFF0D7] tracking-tight mb-2">
-            MEMORY MATCH
-          </h1>
-          <p className="text-xs sm:text-sm text-[#FFF0D7]/80 max-w-lg mx-auto leading-relaxed">
-            {isOnlineMultiplayer
-              ? 'Compete in real time with 2–8 players on a shared 20, 40, 60, or 100-card arcade board.'
-              : 'Flip retro arcade cards two at a time to uncover matching pixel pairs. Choose your challenge mode and board size below.'}
-          </p>
+        {/* Game Title & Intro (collapsed during active multiplayer gameplay to maximize board space) */}
+        {!isCompactOnlineBoard && (
+          <div className="text-center mb-6 sm:mb-8">
+            <h1 className="font-pixel text-lg sm:text-2xl md:text-3xl text-[#FFF0D7] tracking-tight mb-2">
+              MEMORY MATCH
+            </h1>
+            <p className="text-xs sm:text-sm text-[#FFF0D7]/80 max-w-lg mx-auto leading-relaxed">
+              {isOnlineMultiplayer
+                ? 'Compete in real time with 2–8 players on a shared 20, 40, 60, or 100-card arcade board.'
+                : 'Flip retro arcade cards two at a time to uncover matching pixel pairs. Choose your challenge mode and board size below.'}
+            </p>
 
-          {/* Single Player vs Online Multiplayer Selector */}
-          <div className="flex items-center justify-center mt-4">
-            <div className="bg-[#201A36] border border-[#3D345F] p-1 rounded-xl inline-flex items-center gap-1 shadow-md">
-              <button
-                type="button"
-                onClick={() => {
-                  playClick();
-                  setIsOnlineMultiplayer(false);
-                }}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  !isOnlineMultiplayer
-                    ? 'bg-[#56E0CB] text-[#171329] font-bold shadow-sm'
-                    : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
-                }`}
-                aria-pressed={!isOnlineMultiplayer}
-                data-testid="memory-mode-single"
-              >
-                <User className="w-3.5 h-3.5 shrink-0" />
-                <span>Single Player</span>
-              </button>
+            {/* Single Player vs Online Multiplayer Selector */}
+            <div className="flex items-center justify-center mt-4">
+              <div className="bg-[#201A36] border border-[#3D345F] p-1 rounded-xl inline-flex items-center gap-1 shadow-md">
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClick();
+                    setIsOnlineMultiplayer(false);
+                    setIsMultiplayerBoardActive(false);
+                  }}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    !isOnlineMultiplayer
+                      ? 'bg-[#56E0CB] text-[#171329] font-bold shadow-sm'
+                      : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
+                  }`}
+                  aria-pressed={!isOnlineMultiplayer}
+                  data-testid="memory-mode-single"
+                >
+                  <User className="w-3.5 h-3.5 shrink-0" />
+                  <span>Single Player</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => {
-                  playClick();
-                  setIsOnlineMultiplayer(true);
-                }}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  isOnlineMultiplayer
-                    ? 'bg-[#FFC66D] text-[#171329] font-bold shadow-sm'
-                    : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
-                }`}
-                aria-pressed={isOnlineMultiplayer}
-                data-testid="memory-mode-online"
-              >
-                <Globe className="w-3.5 h-3.5 shrink-0" />
-                <span>Online Multiplayer (2–8P)</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClick();
+                    setIsOnlineMultiplayer(true);
+                  }}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                    isOnlineMultiplayer
+                      ? 'bg-[#FFC66D] text-[#171329] font-bold shadow-sm'
+                      : 'text-[#FFF0D7]/75 hover:text-[#FFF0D7] hover:bg-[#292342]'
+                  }`}
+                  aria-pressed={isOnlineMultiplayer}
+                  data-testid="memory-mode-online"
+                >
+                  <Globe className="w-3.5 h-3.5 shrink-0" />
+                  <span>Online Multiplayer (2–8P)</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {isOnlineMultiplayer ? (
-          <MemoryMatchMultiplayerView onBackToHome={onBackToHome} />
+          <MemoryMatchMultiplayerView
+            onBackToHome={onBackToHome}
+            onActiveGameChange={setIsMultiplayerBoardActive}
+          />
         ) : (
           <>
             {/* Step 1: Select Game Mode */}
