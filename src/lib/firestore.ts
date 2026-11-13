@@ -26,8 +26,14 @@ import {
 } from 'firebase/firestore';
 import { getFirestoreDb, formatFirebaseError } from './firebase';
 
+export interface FirestoreSnapshotMetadata {
+  fromCache: boolean;
+  hasPendingWrites: boolean;
+}
+
 export interface FirestoreSubscriptionCallbacks<T> {
   onData: (data: T | null, docId: string) => void;
+  onMetadata?: (meta: FirestoreSnapshotMetadata) => void;
   onError?: (error: Error) => void;
 }
 
@@ -127,6 +133,14 @@ export function subscribeToDocument<T = DocumentData>(
     ref,
     (snapshot) => {
       const snapshotId = snapshot.id;
+      const rawMeta = (snapshot as { metadata?: { fromCache?: boolean; hasPendingWrites?: boolean } })
+        .metadata;
+      if (rawMeta && callbacks.onMetadata) {
+        callbacks.onMetadata({
+          fromCache: Boolean(rawMeta.fromCache),
+          hasPendingWrites: Boolean(rawMeta.hasPendingWrites),
+        });
+      }
       if (!snapshot.exists()) {
         callbacks.onData(null, snapshotId);
         return;

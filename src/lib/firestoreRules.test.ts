@@ -6,7 +6,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import type { MultiplayerRoomDocument } from '../types/multiplayer';
+import type {
+  MemoryMultiplayerPlayerCount,
+  MultiplayerRoomDocument,
+} from '../types/multiplayer';
 import {
   buildInitialRoomDocument,
   applyPlayerJoinOrReconnect,
@@ -22,6 +25,7 @@ import {
   applyStartMemoryMatchGame,
   applySelectMemoryMatchCard,
   applyResolveMemoryMatchMismatch,
+  applyStartMemoryMatchRematch,
 } from '../logic/memoryMatchMultiplayer';
 
 /**
@@ -106,7 +110,7 @@ function evaluateRoomsRule(
       req.hostUid === authUid &&
       req.status === 'waiting' &&
       ['tic-tac-toe', 'memory-match'].includes(req.gameType) &&
-      [2, 3, 4].includes(req.maxPlayers) &&
+      [2, 3, 4, 5, 6, 7, 8].includes(req.maxPlayers) &&
       authUid in req.players &&
       req.players[authUid].uid === authUid &&
       req.players[authUid].isHost === true &&
@@ -271,6 +275,51 @@ function evaluateRoomsRule(
     );
   };
 
+  const rematchPlayerReset = (uid: string): boolean =>
+    req.players[uid].score === 0 && req.players[uid].rematchAccepted === false;
+
+  const minPlayersForRoom = (roomData: MultiplayerRoomDocument): number =>
+    roomData.gameType === 'tic-tac-toe' || roomData.maxPlayers <= 2 ? 2 : 3;
+
+  const expectedPairsForPlayerCount = (playerCount: number): number =>
+    playerCount === 2
+      ? 10
+      : playerCount === 3
+      ? 20
+      : playerCount === 4
+      ? 30
+      : 50;
+
+  const isValidMemoryMatchRematchStart = (): boolean => {
+    const order = res.playerOrder;
+    const prevMM = res.memoryMatchState;
+    const nextMM = req.memoryMatchState;
+    if (res.gameType !== 'memory-match' || !prevMM || !nextMM || !isRoomHost(res)) return false;
+    const expectedPairs = expectedPairsForPlayerCount(order.length);
+    return (
+      order.length >= minPlayersForRoom(res) &&
+      order.length <= res.maxPlayers &&
+      req.status === 'in_progress' &&
+      req.currentTurnUid === order[0] &&
+      nextMM.currentTurnUid === order[0] &&
+      nextMM.currentTurnIndex === 0 &&
+      deepEqual(nextMM.turnOrderUids, order) &&
+      nextMM.roundNumber === (prevMM.roundNumber ?? 1) + 1 &&
+      nextMM.matchedPairs === 0 &&
+      Object.keys(nextMM.matchedByPairKey ?? {}).length === 0 &&
+      nextMM.totalPairs === expectedPairs &&
+      nextMM.cards.length === expectedPairs * 2 &&
+      nextMM.totalPairs === prevMM.totalPairs &&
+      nextMM.cards.length === prevMM.cards.length &&
+      nextMM.flippedCardIds.length === 0 &&
+      nextMM.pendingResetAt === null &&
+      nextMM.winnerUids.length === 0 &&
+      nextMM.isTie === false &&
+      deepEqual(req.ticTacToeState, res.ticTacToeState) &&
+      order.every((uid) => rematchPlayerReset(uid))
+    );
+  };
+
   // Branch 1: Expiry transition requires timestamp >= expiresAt
   if (req.status === 'expired' && ctx.timeMs >= res.expiresAt) {
     return true;
@@ -303,7 +352,8 @@ function evaluateRoomsRule(
     res.status === 'waiting' &&
     req.status === 'in_progress' &&
     isRoomHost(res) &&
-    res.playerOrder.length === res.maxPlayers &&
+    res.playerOrder.length >= minPlayersForRoom(res) &&
+    res.playerOrder.length <= res.maxPlayers &&
     deepEqual(req.playerOrder, res.playerOrder) &&
     playersDiff.addedKeys.length === 0 &&
     playersDiff.removedKeys.length === 0 &&
@@ -312,7 +362,11 @@ function evaluateRoomsRule(
       (req.memoryMatchState !== null &&
         req.memoryMatchState.matchedPairs === 0 &&
         Object.keys(req.memoryMatchState.matchedByPairKey ?? {}).length === 0 &&
-        deepEqual(req.memoryMatchState.turnOrderUids, res.playerOrder)))
+        deepEqual(req.memoryMatchState.turnOrderUids, res.playerOrder) &&
+        req.memoryMatchState.totalPairs ===
+          expectedPairsForPlayerCount(res.playerOrder.length) &&
+        req.memoryMatchState.cards.length ===
+          expectedPairsForPlayerCount(res.playerOrder.length) * 2))
   ) {
     return true;
   }
@@ -347,7 +401,8 @@ function evaluateRoomsRule(
       (req.status === 'in_progress' &&
         isRoomHost(res) &&
         playersDiff.addedKeys.length === 0 &&
-        playersDiff.removedKeys.length === 0))
+        playersDiff.removedKeys.length === 0 &&
+        (res.gameType !== 'memory-match' || isValidMemoryMatchRematchStart())))
   ) {
     return true;
   }
@@ -1063,5 +1118,188 @@ describe('Firestore Security Rules Verification (`firestore.rules`)', () => {
         requestResourceData: afterRematchStart,
       })
     ).toBe(true);
+  });
+});
+
+describe('Firestore rules – Memory Match rematch (Play Again)', () => {
+  const T0 = 1_700_000_000_000;
+
+  function completedRoom(
+    playerCount: MemoryMultiplayerPlayerCount
+  ): MultiplayerRoomDocument {
+    let room = buildInitialRoomDocument({
+      roomCode: 'RMT123',
+      gameType: 'memory-match',
+      hostUid: 'p1',
+      hostNickname: 'Player1',
+      maxPlayers: playerCount,
+      nowMs: T0,
+    });
+    for (let i = 2; i <= playerCount; i++) {
+      room = applyPlayerJoinOrReconnect({ room, uid: `p${i}`, nickname: `Player${i}`, nowMs: T0 + i });
+    }
+    room = applyStartMemoryMatchGame({ room, callerUid: 'p1', nowMs: T0 + 100, randomFn: () => 0.5 });
+    let t = T0 + 200;
+    const cards = room.memoryMatchState!.cards;
+    const seen = new Set<string>();
+    for (const card of cards) {
+      if (seen.has(card.pairKey)) continue;
+      seen.add(card.pairKey);
+      const other = cards.find((c) => c.pairKey === card.pairKey && c.id !== card.id)!;
+      room = applySelectMemoryMatchCard({ room, callerUid: 'p1', cardId: card.id, nowMs: (t += 5) }).nextRoom;
+      room = applySelectMemoryMatchCard({ room, callerUid: 'p1', cardId: other.id, nowMs: (t += 5) }).nextRoom;
+    }
+    expect(room.status).toBe('completed');
+    return room;
+  }
+
+  it.each([2 as const, 3 as const, 4 as const, 5 as const, 6 as const, 7 as const, 8 as const])(
+    'allows the host to immediately start a rematch round without requiring guest readiness votes (%i players)',
+    (playerCount) => {
+      const done = completedRoom(playerCount);
+      const t = done.lastActivityAt + 50;
+
+      // Host immediately starts the next round without any prior guest readiness votes
+      const next = applyStartMemoryMatchRematch({
+        room: done,
+        callerUid: 'p1',
+        nowMs: t + 10,
+        randomFn: () => 0.1,
+      });
+      expect(
+        evaluateRoomsRule('update', {
+          auth: { uid: 'p1' },
+          timeMs: t + 10,
+          roomCode: 'RMT123',
+          resourceData: done,
+          requestResourceData: next,
+        })
+      ).toBe(true);
+
+      // A non-host cannot commit the same rematch start
+      expect(
+        evaluateRoomsRule('update', {
+          auth: { uid: 'p2' },
+          timeMs: t + 10,
+          roomCode: 'RMT123',
+          resourceData: done,
+          requestResourceData: next,
+        })
+      ).toBe(false);
+
+      // Host cannot carry scores / ownership / round count into the new round
+      const carriedScore: MultiplayerRoomDocument = {
+        ...next,
+        players: { ...next.players, p1: { ...next.players['p1'], score: 5 } },
+      };
+      const carriedOwnership: MultiplayerRoomDocument = {
+        ...next,
+        memoryMatchState: {
+          ...next.memoryMatchState!,
+          matchedByPairKey: { x: 'p1' },
+          matchedPairs: 1,
+        },
+      };
+      const skippedRound: MultiplayerRoomDocument = {
+        ...next,
+        memoryMatchState: { ...next.memoryMatchState!, roundNumber: 7 },
+      };
+      const reorderedPlayers: MultiplayerRoomDocument = {
+        ...next,
+        playerOrder: [...next.playerOrder].reverse(),
+      };
+      for (const bad of [carriedScore, carriedOwnership, skippedRound, reorderedPlayers]) {
+        expect(
+          evaluateRoomsRule('update', {
+            auth: { uid: 'p1' },
+            timeMs: t + 10,
+            roomCode: 'RMT123',
+            resourceData: done,
+            requestResourceData: bad,
+          })
+        ).toBe(false);
+      }
+    }
+  );
+
+  it('enforces flexible minimum player requirements in Firestore rules (e.g., 8-player capacity started with 3 players, rejecting start at 2 players or manipulated board sizes)', () => {
+    const room8Cap = buildInitialRoomDocument({
+      roomCode: 'FLX888',
+      gameType: 'memory-match',
+      hostUid: 'p1',
+      hostNickname: 'Player1',
+      maxPlayers: 8,
+      nowMs: T0,
+    });
+    const room2Of8 = applyPlayerJoinOrReconnect({
+      room: room8Cap,
+      uid: 'p2',
+      nickname: 'Player2',
+      nowMs: T0 + 10,
+    });
+    const room3Of8 = applyPlayerJoinOrReconnect({
+      room: room2Of8,
+      uid: 'p3',
+      nickname: 'Player3',
+      nowMs: T0 + 20,
+    });
+
+    const validStart3Of8 = applyStartMemoryMatchGame({
+      room: room3Of8,
+      callerUid: 'p1',
+      nowMs: T0 + 100,
+      randomFn: () => 0.5,
+    });
+
+    // 1. Valid start with 3 of 8 players (40 cards, 20 pairs) is permitted by Firestore rules
+    expect(
+      evaluateRoomsRule('update', {
+        auth: { uid: 'p1' },
+        timeMs: T0 + 100,
+        roomCode: 'FLX888',
+        resourceData: room3Of8,
+        requestResourceData: validStart3Of8,
+      })
+    ).toBe(true);
+
+    // 2. Forging a start when only 2 of 8 players have joined is rejected by Firestore rules
+    const forgedStart2Of8: MultiplayerRoomDocument = {
+      ...validStart3Of8,
+      players: room2Of8.players,
+      playerOrder: room2Of8.playerOrder,
+      memoryMatchState: {
+        ...validStart3Of8.memoryMatchState!,
+        turnOrderUids: room2Of8.playerOrder,
+        totalPairs: 10,
+        cards: validStart3Of8.memoryMatchState!.cards.slice(0, 20),
+      },
+    };
+    expect(
+      evaluateRoomsRule('update', {
+        auth: { uid: 'p1' },
+        timeMs: T0 + 100,
+        roomCode: 'FLX888',
+        resourceData: room2Of8,
+        requestResourceData: forgedStart2Of8,
+      })
+    ).toBe(false);
+
+    // 3. Manipulating the board size (e.g., submitting a 100-card board when only 3 players are participating) is rejected
+    const manipulatedBoardSize: MultiplayerRoomDocument = {
+      ...validStart3Of8,
+      memoryMatchState: {
+        ...validStart3Of8.memoryMatchState!,
+        totalPairs: 50,
+      },
+    };
+    expect(
+      evaluateRoomsRule('update', {
+        auth: { uid: 'p1' },
+        timeMs: T0 + 100,
+        roomCode: 'FLX888',
+        resourceData: room3Of8,
+        requestResourceData: manipulatedBoardSize,
+      })
+    ).toBe(false);
   });
 });

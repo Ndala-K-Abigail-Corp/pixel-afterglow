@@ -18,7 +18,7 @@ export function usePWAInstall() {
   useEffect(() => {
     // Detect standalone mode (already installed or running as standalone app)
     const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
+      Boolean(window.matchMedia?.('(display-mode: standalone)')?.matches) ||
       (window.navigator as unknown as { standalone?: boolean }).standalone === true;
     setIsInstalled(isStandalone);
 

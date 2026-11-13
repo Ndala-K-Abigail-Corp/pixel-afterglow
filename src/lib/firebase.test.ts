@@ -106,6 +106,7 @@ import {
   isValidRoomStateTransition,
   computeRoomExpiresAt,
   isRoomExpired,
+  getMinimumPlayersToStart,
   MEMORY_MULTIPLAYER_CONFIGS,
   ROOM_EXPIRY_POLICIES_MS,
 } from '../types/multiplayer';
@@ -223,22 +224,38 @@ describe('Phase 1 shared multiplayer room data structures & policies', () => {
     );
   });
 
-  it('defines Memory Match board sizes for 2, 3, and 4 players', () => {
+  it('defines Memory Match board sizes and minimum player requirements for 2 to 8 players', () => {
     expect(MEMORY_MULTIPLAYER_CONFIGS[2]).toEqual({
       maxPlayers: 2,
+      minPlayersToStart: 2,
       totalCards: 20,
       matchingPairs: 10,
     });
     expect(MEMORY_MULTIPLAYER_CONFIGS[3]).toEqual({
       maxPlayers: 3,
+      minPlayersToStart: 3,
       totalCards: 40,
       matchingPairs: 20,
     });
     expect(MEMORY_MULTIPLAYER_CONFIGS[4]).toEqual({
       maxPlayers: 4,
+      minPlayersToStart: 3,
       totalCards: 60,
       matchingPairs: 30,
     });
+    for (const count of [5, 6, 7, 8] as const) {
+      expect(MEMORY_MULTIPLAYER_CONFIGS[count]).toEqual({
+        maxPlayers: count,
+        minPlayersToStart: 3,
+        totalCards: 100,
+        matchingPairs: 50,
+      });
+    }
+
+    expect(getMinimumPlayersToStart(2, 'memory-match')).toBe(2);
+    for (const cap of [3, 4, 5, 6, 7, 8]) {
+      expect(getMinimumPlayersToStart(cap, 'memory-match')).toBe(3);
+    }
   });
 });
 

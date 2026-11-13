@@ -82,6 +82,16 @@ service cloud.firestore {
     // Enforces that Memory Match matchedPairs increases by at most 1 per move,
     // existing matched-pair ownership in matchedByPairKey can never be removed or overwritten,
     // and any newly matched pair is owned by request.auth.uid.
+    //
+    // Architectural Limitation (Client-Side Match Resolution):
+    // Firestore Security Rules v2 do not support unbounded loops or arbitrary index lookup over the
+    // 20-to-100-element `cards` list to independently verify that two flipped card IDs share the same
+    // hidden `pairKey`. Rules strictly enforce turn ownership (`currentTurnUid == request.auth.uid`),
+    // cap `pairDelta` to at most +1 per turn, tie any caller score increase to `pairDelta`, and
+    // prevent overwriting or removing prior `matchedByPairKey` entries, but a modified client on its
+    // own turn could potentially submit a synthetic match (`pairDelta == 1`) without genuinely matching
+    // two cards. Full server-authoritative match resolution would require moving card-flip evaluation
+    // into a trusted backend (e.g. Cloud Functions for Firebase with a private deck subcollection).
     function isValidMemoryMatchPairOwnershipDiff() {
       let prevMM = resource.data.memoryMatchState;
       let nextMM = request.resource.data.memoryMatchState;
@@ -171,6 +181,66 @@ service cloud.firestore {
         && (request.resource.data.currentTurnUid in resource.data.playerOrder);
     }
 
+    function rematchPlayerReset(uid) {
+      return request.resource.data.players[uid].score == 0
+        && request.resource.data.players[uid].rematchAccepted == false;
+    }
+
+    // Minimum joined players required to start or rematch:
+    // - Capacity 2 (or Tic-Tac-Toe) -> minimum 2 players
+    // - Capacity 3 to 8 -> minimum 3 players
+    function minPlayersForRoom(roomData) {
+      return (roomData.gameType == 'tic-tac-toe' || roomData.maxPlayers <= 2) ? 2 : 3;
+    }
+
+    // Expected matching pairs for the actual participating player count (2..8):
+    function expectedPairsForPlayerCount(playerCount) {
+      return playerCount == 2 ? 10
+        : playerCount == 3 ? 20
+        : playerCount == 4 ? 30
+        : 50;
+    }
+
+    // Host starting the next Memory Match round immediately: fresh state, scores zeroed,
+    // ownership cleared, round incremented exactly once, same order/membership.
+    function isValidMemoryMatchRematchStart() {
+      let order = resource.data.playerOrder;
+      let prevMM = resource.data.memoryMatchState;
+      let nextMM = request.resource.data.memoryMatchState;
+      let expectedPairs = expectedPairsForPlayerCount(order.size());
+      return resource.data.gameType == 'memory-match'
+        && prevMM != null
+        && nextMM != null
+        && isRoomHost(resource.data)
+        && order.size() >= minPlayersForRoom(resource.data)
+        && order.size() <= resource.data.maxPlayers
+        && request.resource.data.status == 'in_progress'
+        && request.resource.data.currentTurnUid == order[0]
+        && nextMM.currentTurnUid == order[0]
+        && nextMM.currentTurnIndex == 0
+        && nextMM.turnOrderUids == order
+        && nextMM.roundNumber == prevMM.roundNumber + 1
+        && nextMM.matchedPairs == 0
+        && nextMM.matchedByPairKey.size() == 0
+        && nextMM.totalPairs == expectedPairs
+        && nextMM.cards.size() == expectedPairs * 2
+        && nextMM.totalPairs == prevMM.totalPairs
+        && nextMM.cards.size() == prevMM.cards.size()
+        && nextMM.flippedCardIds.size() == 0
+        && nextMM.pendingResetAt == null
+        && nextMM.winnerUids.size() == 0
+        && nextMM.isTie == false
+        && request.resource.data.ticTacToeState == resource.data.ticTacToeState
+        && rematchPlayerReset(order[0])
+        && rematchPlayerReset(order[1])
+        && (order.size() < 3 || rematchPlayerReset(order[2]))
+        && (order.size() < 4 || rematchPlayerReset(order[3]))
+        && (order.size() < 5 || rematchPlayerReset(order[4]))
+        && (order.size() < 6 || rematchPlayerReset(order[5]))
+        && (order.size() < 7 || rematchPlayerReset(order[6]))
+        && (order.size() < 8 || rematchPlayerReset(order[7]));
+    }
+
     match /rooms/{roomCode} {
       // Authenticated players may read room state to join by code or listen to active room updates
       allow read: if isSignedIn();
@@ -181,7 +251,7 @@ service cloud.firestore {
         && request.resource.data.hostUid == request.auth.uid
         && request.resource.data.status == 'waiting'
         && request.resource.data.gameType in ['tic-tac-toe', 'memory-match']
-        && request.resource.data.maxPlayers in [2, 3, 4]
+        && request.resource.data.maxPlayers in [2, 3, 4, 5, 6, 7, 8]
         && (request.auth.uid in request.resource.data.players)
         && request.resource.data.players[request.auth.uid].uid == request.auth.uid
         && request.resource.data.players[request.auth.uid].isHost == true
@@ -224,12 +294,13 @@ service cloud.firestore {
             )
           )
           ||
-          // 4. Host starting the game once required player count is reached
+          // 4. Host starting the game once minimum required player count is reached
           (
             resource.data.status == 'waiting'
             && request.resource.data.status == 'in_progress'
             && isRoomHost(resource.data)
-            && resource.data.playerOrder.size() == resource.data.maxPlayers
+            && resource.data.playerOrder.size() >= minPlayersForRoom(resource.data)
+            && resource.data.playerOrder.size() <= resource.data.maxPlayers
             && request.resource.data.playerOrder == resource.data.playerOrder
             && request.resource.data.players.diff(resource.data.players).addedKeys().size() == 0
             && request.resource.data.players.diff(resource.data.players).removedKeys().size() == 0
@@ -241,6 +312,8 @@ service cloud.firestore {
                 && request.resource.data.memoryMatchState.matchedPairs == 0
                 && request.resource.data.memoryMatchState.matchedByPairKey.size() == 0
                 && request.resource.data.memoryMatchState.turnOrderUids == resource.data.playerOrder
+                && request.resource.data.memoryMatchState.totalPairs == expectedPairsForPlayerCount(resource.data.playerOrder.size())
+                && request.resource.data.memoryMatchState.cards.size() == expectedPairsForPlayerCount(resource.data.playerOrder.size()) * 2
               )
             )
           )
@@ -290,6 +363,10 @@ service cloud.firestore {
                 && isRoomHost(resource.data)
                 && request.resource.data.players.diff(resource.data.players).addedKeys().size() == 0
                 && request.resource.data.players.diff(resource.data.players).removedKeys().size() == 0
+                && (
+                  resource.data.gameType != 'memory-match'
+                  || isValidMemoryMatchRematchStart()
+                )
               )
             )
           )

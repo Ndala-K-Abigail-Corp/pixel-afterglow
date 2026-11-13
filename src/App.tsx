@@ -13,15 +13,43 @@ import { TicTacToeGame } from './components/game/TicTacToeGame';
 import { MemoryMatchGame } from './components/game/MemoryMatchGame';
 import { AboutModal } from './components/common/AboutModal';
 import { AudioProvider } from './context/AudioContext';
+import {
+  parseRoomInvitationFromUrl,
+  clearRoomInvitationFromUrl,
+} from './logic/multiplayerRoom';
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<AppView>('home');
+  const [currentView, setCurrentView] = useState<AppView>(() => {
+    const invitation = parseRoomInvitationFromUrl();
+    if (invitation) {
+      return invitation.gameType === 'tic-tac-toe'
+        ? 'game-tic-tac-toe'
+        : 'game-memory-match';
+    }
+    return 'home';
+  });
   const [isAboutOpen, setIsAboutOpen] = useState<boolean>(false);
 
   // Sync window scroll when switching views
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [currentView]);
+
+  // Listen for browser back/forward navigation with invitation URLs
+  useEffect(() => {
+    const handlePopState = () => {
+      const invitation = parseRoomInvitationFromUrl();
+      if (invitation) {
+        setCurrentView(
+          invitation.gameType === 'tic-tac-toe'
+            ? 'game-tic-tac-toe'
+            : 'game-memory-match'
+        );
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const handleStartGame = (gameId: string) => {
     if (gameId === 'tic-tac-toe') {
@@ -32,6 +60,7 @@ export default function App() {
   };
 
   const handleNavigateHome = () => {
+    clearRoomInvitationFromUrl();
     setCurrentView('home');
   };
 

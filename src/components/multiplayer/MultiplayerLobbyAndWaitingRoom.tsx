@@ -8,6 +8,7 @@ import {
   Copy,
   Check,
   Share2,
+  Link2,
   Crown,
   Users,
   Play,
@@ -26,6 +27,8 @@ import {
   MultiplayerRoomDocument,
   MemoryMultiplayerPlayerCount,
   MEMORY_MULTIPLAYER_CONFIGS,
+  MEMORY_ROOM_CAPACITY_OPTIONS,
+  getMinimumPlayersToStart,
 } from '../../types/multiplayer';
 import {
   isPlayerEffectivelyConnected,
@@ -33,7 +36,15 @@ import {
   sanitizeNickname,
   isValidNickname,
   isValidRoomCodeFormat,
+  buildRoomInvitationShareData,
+  parseRoomInvitationFromUrl,
+  clearRoomInvitationFromUrl,
+  MULTIPLAYER_USER_MESSAGES,
 } from '../../logic/multiplayerRoom';
+import type {
+  InvitationRoomInfo,
+  InvitationValidationState,
+} from '../../hooks/useMultiplayerRoom';
 import { useAudio } from '../../context/AudioContext';
 
 export interface MultiplayerLobbyAndWaitingRoomProps {
@@ -44,8 +55,14 @@ export interface MultiplayerLobbyAndWaitingRoomProps {
   isHost: boolean;
   isLoading: boolean;
   isReconnecting: boolean;
+  isSynchronizing?: boolean;
+  isConnected?: boolean;
   error: string | null;
   preferredNickname: string;
+  invitedRoomCode?: string | null;
+  invitationStatus?: InvitationValidationState;
+  invitationRoomInfo?: InvitationRoomInfo | null;
+  onDismissInvitation?: () => void;
   onCreateRoom: (params: {
     nickname: string;
     maxPlayers?: MemoryMultiplayerPlayerCount;
@@ -70,8 +87,14 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
   isHost,
   isLoading,
   isReconnecting,
+  isSynchronizing = false,
+  isConnected = true,
   error,
   preferredNickname,
+  invitedRoomCode,
+  invitationStatus = 'idle',
+  invitationRoomInfo = null,
+  onDismissInvitation,
   onCreateRoom,
   onJoinRoom,
   onStartGame,
@@ -80,12 +103,28 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
   onClearError,
 }) => {
   const { playClick } = useAudio();
-  const [lobbyTab, setLobbyTab] = useState<'create' | 'join'>('create');
+
+  // Detect invitation code either from hook prop or directly from browser URL
+  const initialInvitedCode = (() => {
+    if (invitedRoomCode) return invitedRoomCode;
+    const parsed = parseRoomInvitationFromUrl();
+    if (parsed && parsed.gameType === gameType) {
+      return parsed.normalizedRoomCode || parsed.rawRoomParam.toUpperCase();
+    }
+    return '';
+  })();
+
+  const [lobbyTab, setLobbyTab] = useState<'create' | 'join'>(() =>
+    initialInvitedCode ? 'join' : 'create'
+  );
   const [nickname, setNickname] = useState<string>(preferredNickname || '');
-  const [roomCodeInput, setRoomCodeInput] = useState<string>('');
+  const [roomCodeInput, setRoomCodeInput] = useState<string>(
+    () => initialInvitedCode
+  );
   const [selectedMaxPlayers, setSelectedMaxPlayers] =
     useState<MemoryMultiplayerPlayerCount>(2);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
+  const [copiedInviteLink, setCopiedInviteLink] = useState<boolean>(false);
   const [sharedFeedback, setSharedFeedback] = useState<boolean>(false);
   const [localValidationError, setLocalValidationError] = useState<string | null>(
     null
@@ -97,6 +136,14 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
       setNickname(preferredNickname);
     }
   }, [preferredNickname, nickname]);
+
+  // Automatically switch to Join with Code tab and prefill room code when an invitation link is opened
+  useEffect(() => {
+    if (invitedRoomCode) {
+      setLobbyTab('join');
+      setRoomCodeInput(invitedRoomCode);
+    }
+  }, [invitedRoomCode]);
 
   // Refresh clock periodically in waiting room to reflect live connection status
   useEffect(() => {
@@ -119,27 +166,49 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
     }
   };
 
+  const handleCopyInviteLink = async () => {
+    if (!room) return;
+    playClick();
+    const shareData = buildRoomInvitationShareData({
+      roomCode: room.roomCode,
+      gameType,
+      gameTitle,
+    });
+    try {
+      await navigator.clipboard.writeText(shareData.invitationUrl);
+      setCopiedInviteLink(true);
+      setTimeout(() => setCopiedInviteLink(false), 2000);
+    } catch {
+      setCopiedInviteLink(false);
+    }
+  };
+
   const handleShareRoom = async () => {
     if (!room) return;
     playClick();
-    const shareText = `Join my ${gameTitle} room on Pixel Afterglow! Room Code: ${room.roomCode}`;
-    const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const shareData = buildRoomInvitationShareData({
+      roomCode: room.roomCode,
+      gameType,
+      gameTitle,
+    });
 
     if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
       try {
         await navigator.share({
-          title: `Pixel Afterglow – ${gameTitle}`,
-          text: shareText,
-          url: shareUrl,
+          title: shareData.title,
+          text: shareData.message,
+          url: shareData.invitationUrl,
         });
+        setSharedFeedback(true);
+        setTimeout(() => setSharedFeedback(false), 2000);
         return;
       } catch {
-        // Fall back to clipboard if user cancels or share fails
+        // Fall back to clipboard if user cancels or native share fails
       }
     }
 
     try {
-      await navigator.clipboard.writeText(`${shareText} ${shareUrl}`.trim());
+      await navigator.clipboard.writeText(shareData.message);
       setSharedFeedback(true);
       setTimeout(() => setSharedFeedback(false), 2000);
     } catch {
@@ -147,15 +216,29 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
     }
   };
 
+  const handleResetInvitation = () => {
+    playClick();
+    setLocalValidationError(null);
+    onClearError();
+    if (onDismissInvitation) {
+      onDismissInvitation();
+    } else {
+      clearRoomInvitationFromUrl();
+    }
+    setRoomCodeInput('');
+    setLobbyTab('join');
+  };
+
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
     playClick();
     onClearError();
     setLocalValidationError(null);
 
     const cleanedNickname = sanitizeNickname(nickname);
     if (!isValidNickname(cleanedNickname)) {
-      setLocalValidationError('Please enter a nickname between 2 and 16 characters.');
+      setLocalValidationError(MULTIPLAYER_USER_MESSAGES.INVALID_NICKNAME);
       return;
     }
 
@@ -167,19 +250,20 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
 
   const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
     playClick();
     onClearError();
     setLocalValidationError(null);
 
     const cleanedNickname = sanitizeNickname(nickname);
     if (!isValidNickname(cleanedNickname)) {
-      setLocalValidationError('Please enter a nickname between 2 and 16 characters.');
+      setLocalValidationError(MULTIPLAYER_USER_MESSAGES.INVALID_NICKNAME);
       return;
     }
 
     const normalizedCode = normalizeRoomCode(roomCodeInput);
     if (!isValidRoomCodeFormat(normalizedCode)) {
-      setLocalValidationError('Please enter a valid 6-character room code.');
+      setLocalValidationError(MULTIPLAYER_USER_MESSAGES.INVALID_ROOM_CODE);
       return;
     }
 
@@ -210,18 +294,23 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
       .filter(Boolean);
     const joinedCount = joinedPlayers.length;
     const requiredCount = room.maxPlayers;
+    const minRequired = getMinimumPlayersToStart(requiredCount, gameType);
+    const hasMinimumPlayers = joinedCount >= minRequired;
     const isRoomFull = joinedCount >= requiredCount;
     const allPlayersConnected = joinedPlayers.every((p) =>
       isPlayerEffectivelyConnected(p, nowMs)
     );
-    const canHostStart = isHost && isRoomFull && allPlayersConnected && !isLoading;
+    const canHostStart =
+      isHost && hasMinimumPlayers && allPlayersConnected && !isLoading;
 
     const emptySlotsCount = Math.max(0, requiredCount - joinedCount);
+    const effectivePlayerCount = Math.max(
+      minRequired,
+      Math.min(requiredCount, joinedCount)
+    ) as MemoryMultiplayerPlayerCount;
     const memoryConfig =
       gameType === 'memory-match'
-        ? MEMORY_MULTIPLAYER_CONFIGS[
-            room.maxPlayers as MemoryMultiplayerPlayerCount
-          ]
+        ? MEMORY_MULTIPLAYER_CONFIGS[effectivePlayerCount]
         : null;
 
     return (
@@ -229,27 +318,71 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
         className="bg-[#292342]/90 border-2 border-[#56E0CB]/40 rounded-2xl p-4 sm:p-6 max-w-2xl mx-auto shadow-[0_0_35px_rgba(86,224,203,0.12)]"
         data-testid="multiplayer-waiting-room"
       >
-        {/* Top Banner: Game & Status */}
+        {/* Top Banner: Game, Capacity, Minimum & Status */}
         <div className="flex flex-wrap items-center justify-between gap-2 pb-4 mb-4 border-b border-[#FFF0D7]/10">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#56E0CB]/15 border border-[#56E0CB]/40 text-[#56E0CB] font-['Press_Start_2P'] text-[9px] uppercase">
               <Sparkles className="w-3 h-3" />
               {gameTitle} Lobby
             </span>
+            <span
+              className="px-2.5 py-1 rounded-full bg-[#FFF0D7]/10 border border-[#FFF0D7]/25 text-[#FFF0D7] text-xs font-semibold"
+              data-testid="waiting-room-capacity-info"
+            >
+              Max {requiredCount}P · Min {minRequired}P Required
+            </span>
             {memoryConfig && (
-              <span className="px-2.5 py-1 rounded-full bg-[#FFC66D]/15 border border-[#FFC66D]/40 text-[#FFC66D] text-xs font-semibold">
-                {memoryConfig.maxPlayers}P · {memoryConfig.totalCards} Cards (
-                {memoryConfig.matchingPairs} Pairs)
+              <span
+                className="px-2.5 py-1 rounded-full bg-[#FFC66D]/15 border border-[#FFC66D]/40 text-[#FFC66D] text-xs font-semibold"
+                data-testid="waiting-room-board-preview"
+              >
+                {hasMinimumPlayers ? `${joinedCount}P` : `${minRequired}P+`} Board ·{' '}
+                {memoryConfig.totalCards} Cards ({memoryConfig.matchingPairs} Pairs)
               </span>
             )}
           </div>
 
           <div className="flex items-center gap-1.5 text-xs font-semibold text-[#FFF0D7]/80">
+            {(isSynchronizing || isConnected === false) && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FFC66D]/15 border border-[#FFC66D]/40 text-[#FFC66D] text-[10px] font-semibold animate-pulse"
+                data-testid="waiting-room-sync-indicator"
+              >
+                <Loader2 className="w-3 h-3 animate-spin" />
+                {isConnected === false ? 'Reconnecting...' : 'Syncing...'}
+              </span>
+            )}
             <Users className="w-4 h-4 text-[#56E0CB]" />
             <span data-testid="waiting-room-player-count">
-              {joinedCount} / {requiredCount} Players Joined
+              {joinedCount} of {requiredCount} players joined
             </span>
           </div>
+        </div>
+
+        {/* Readiness Status Banner */}
+        <div
+          className={`mb-4 px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm font-semibold flex items-center justify-between gap-2 ${
+            hasMinimumPlayers
+              ? 'bg-[#56E0CB]/15 border-[#56E0CB]/50 text-[#56E0CB]'
+              : 'bg-[#FFC66D]/12 border-[#FFC66D]/40 text-[#FFC66D]'
+          }`}
+          role="status"
+          data-testid="waiting-room-status-banner"
+        >
+          <span>
+            {hasMinimumPlayers
+              ? `${joinedCount} of ${requiredCount} players joined – Ready to start!`
+              : `${joinedCount} of ${requiredCount} players joined – Waiting for ${
+                  minRequired - joinedCount
+                } more player${
+                  minRequired - joinedCount === 1 ? '' : 's'
+                } (minimum ${minRequired} required)`}
+          </span>
+          {hasMinimumPlayers && !isRoomFull && (
+            <span className="text-[11px] text-[#FFF0D7]/75 font-normal">
+              Up to {requiredCount - joinedCount} more can still join
+            </span>
+          )}
         </div>
 
         {/* Error Banner */}
@@ -300,6 +433,25 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
 
             <button
               type="button"
+              onClick={handleCopyInviteLink}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#292342] hover:bg-[#56E0CB]/20 border border-[#56E0CB]/50 text-[#56E0CB] text-xs font-bold transition-all cursor-pointer"
+              data-testid="copy-invite-link-btn"
+            >
+              {copiedInviteLink ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-[#56E0CB]" />
+                  Link Copied!
+                </>
+              ) : (
+                <>
+                  <Link2 className="w-3.5 h-3.5" />
+                  Copy Link
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
               onClick={handleShareRoom}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#292342] hover:bg-[#FFC66D]/20 border border-[#FFC66D]/50 text-[#FFC66D] text-xs font-bold transition-all cursor-pointer"
               data-testid="share-room-btn"
@@ -343,12 +495,20 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
                     <div
                       className={`w-8 h-8 rounded-lg flex items-center justify-center font-['Press_Start_2P'] text-xs shrink-0 ${
                         index === 0
-                          ? 'bg-[#FF776E]/20 text-[#FF776E] border border-[#FF776E]/40'
+                          ? 'bg-[#3B82F6]/20 text-[#3B82F6] border border-[#3B82F6]/40'
                           : index === 1
-                          ? 'bg-[#56E0CB]/20 text-[#56E0CB] border border-[#56E0CB]/40'
+                          ? 'bg-[#EF4444]/20 text-[#EF4444] border border-[#EF4444]/40'
                           : index === 2
-                          ? 'bg-[#FFC66D]/20 text-[#FFC66D] border border-[#FFC66D]/40'
-                          : 'bg-[#B388FF]/20 text-[#B388FF] border border-[#B388FF]/40'
+                          ? 'bg-[#22C55E]/20 text-[#22C55E] border border-[#22C55E]/40'
+                          : index === 3
+                          ? 'bg-[#A855F7]/20 text-[#A855F7] border border-[#A855F7]/40'
+                          : index === 4
+                          ? 'bg-[#F97316]/20 text-[#F97316] border border-[#F97316]/40'
+                          : index === 5
+                          ? 'bg-[#EC4899]/20 text-[#EC4899] border border-[#EC4899]/40'
+                          : index === 6
+                          ? 'bg-[#EAB308]/20 text-[#EAB308] border border-[#EAB308]/40'
+                          : 'bg-[#06B6D4]/20 text-[#06B6D4] border border-[#06B6D4]/40'
                       }`}
                     >
                       {player.symbol ?? `P${index + 1}`}
@@ -454,7 +614,9 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
               ) : (
                 <Play className="w-4 h-4 fill-current" />
               )}
-              {isRoomFull ? 'Start Match' : `Need ${requiredCount - joinedCount} More`}
+              {hasMinimumPlayers
+                ? 'Start Match'
+                : `Need ${minRequired - joinedCount} More (Min ${minRequired})`}
             </button>
           </div>
         ) : (
@@ -462,9 +624,11 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
             <div className="flex items-center gap-2 text-xs text-[#FFC66D]">
               <Loader2 className="w-4 h-4 animate-spin shrink-0" />
               <span>
-                {isRoomFull
-                  ? 'All players ready! Waiting for the host to start the match...'
-                  : `Waiting for ${requiredCount - joinedCount} more player(s) to join...`}
+                {hasMinimumPlayers
+                  ? `${joinedCount} of ${requiredCount} players joined – Ready to start! Waiting for the host...`
+                  : `Waiting for ${
+                      minRequired - joinedCount
+                    } more player(s) to join (minimum ${minRequired} required)...`}
               </span>
             </div>
 
@@ -534,15 +698,61 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
         </button>
       </div>
 
+      {/* Invitation Checking / Ready Banner */}
+      {invitationStatus === 'checking' && (
+        <div
+          role="status"
+          className="mb-4 p-3 rounded-xl bg-[#56E0CB]/12 border border-[#56E0CB]/40 text-[#56E0CB] text-xs sm:text-sm flex items-center gap-2.5"
+          data-testid="invitation-checking-banner"
+        >
+          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+          <span>Checking room invitation...</span>
+        </div>
+      )}
+
+      {invitationStatus === 'joinable' && invitationRoomInfo && !error && !localValidationError && (
+        <div
+          role="status"
+          className="mb-4 p-3 rounded-xl bg-[#56E0CB]/15 border border-[#56E0CB]/50 text-[#FFF0D7] text-xs sm:text-sm flex items-start gap-2.5"
+          data-testid="invitation-valid-banner"
+        >
+          <Sparkles className="w-4 h-4 text-[#56E0CB] shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold text-[#56E0CB]">
+              Invited to Room {invitationRoomInfo.roomCode} ({invitationRoomInfo.joinedCount}/{invitationRoomInfo.maxPlayers} players)
+            </p>
+            <p className="text-[#FFF0D7]/80 text-xs mt-0.5">
+              Enter your arcade nickname below and click Join Room to join {invitationRoomInfo.hostNickname}&apos;s match.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Error Display */}
       {(error || localValidationError) && (
         <div
           role="alert"
-          className="mb-4 p-3 rounded-xl bg-[#FF776E]/15 border border-[#FF776E] text-[#FFF0D7] text-xs sm:text-sm flex items-start gap-2.5"
+          className="mb-4 p-3 rounded-xl bg-[#FF776E]/15 border border-[#FF776E] text-[#FFF0D7] text-xs sm:text-sm flex flex-col gap-2"
           data-testid="multiplayer-error-banner"
         >
-          <AlertTriangle className="w-4 h-4 text-[#FF776E] shrink-0 mt-0.5" />
-          <span>{error || localValidationError}</span>
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-[#FF776E] shrink-0 mt-0.5" />
+            <span>{error || localValidationError}</span>
+          </div>
+          {(invitationStatus === 'invalid' ||
+            invitationStatus === 'unavailable' ||
+            Boolean(invitedRoomCode)) && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleResetInvitation}
+                className="px-3 py-1.5 rounded-lg bg-[#171329] hover:bg-[#292342] border border-[#FFF0D7]/25 text-[#56E0CB] text-xs font-bold transition-colors cursor-pointer"
+                data-testid="invitation-reset-btn"
+              >
+                Enter Another Room Code
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -567,39 +777,43 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
             />
           </div>
 
-          {/* Player Count Selector for Memory Match */}
+          {/* Player Count Selector for Memory Match (4 Options: 2P, 3P, 4P, 5–8P) */}
           {gameType === 'memory-match' && (
             <div>
               <label className="block font-['Press_Start_2P'] text-[10px] text-[#FFC66D] uppercase tracking-wider mb-2">
-                Select Number of Players
+                Select Room Capacity
               </label>
-              <div className="grid grid-cols-3 gap-2.5">
-                {([2, 3, 4] as MemoryMultiplayerPlayerCount[]).map((count) => {
-                  const cfg = MEMORY_MULTIPLAYER_CONFIGS[count];
-                  const isSelected = selectedMaxPlayers === count;
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="memory-capacity-options">
+                {MEMORY_ROOM_CAPACITY_OPTIONS.map((option) => {
+                  const isSelected = selectedMaxPlayers === option.maxPlayers;
                   return (
                     <button
-                      key={count}
+                      key={option.maxPlayers}
                       type="button"
                       onClick={() => {
                         playClick();
-                        setSelectedMaxPlayers(count);
+                        setSelectedMaxPlayers(option.maxPlayers);
                       }}
-                      className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                      className={`p-2.5 sm:p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
                         isSelected
                           ? 'bg-[#171329] border-[#FFC66D] shadow-[0_0_15px_rgba(255,198,109,0.2)]'
                           : 'bg-[#171329]/60 border-[#FFF0D7]/15 hover:border-[#FFF0D7]/35'
                       }`}
-                      data-testid={`select-players-${count}`}
+                      data-testid={`select-players-${option.maxPlayers}`}
                     >
-                      <div className="font-['Press_Start_2P'] text-xs text-[#FFF0D7] mb-1">
-                        {count}P
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-['Press_Start_2P'] text-xs text-[#FFF0D7]">
+                          {option.label}
+                        </span>
+                        <span className="text-[9px] text-[#FFC66D]/85 font-semibold">
+                          Min {option.minPlayersToStart}P
+                        </span>
                       </div>
                       <div className="text-[11px] font-bold text-[#56E0CB]">
-                        {cfg.totalCards} Cards
+                        {option.totalCards} Cards
                       </div>
                       <div className="text-[10px] text-[#FFF0D7]/60">
-                        {cfg.matchingPairs} Pairs
+                        {option.matchingPairs} Pairs
                       </div>
                     </button>
                   );

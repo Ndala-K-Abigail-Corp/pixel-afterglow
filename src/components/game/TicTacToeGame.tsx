@@ -17,7 +17,10 @@ import {
   saveScores,
   clearStoredScores,
 } from '../../logic/ticTacToe';
-import { loadActiveRoomSession } from '../../logic/multiplayerRoom';
+import {
+  loadActiveRoomSession,
+  hasRoomInvitationInUrl,
+} from '../../logic/multiplayerRoom';
 import { TicTacToeMultiplayerView } from './TicTacToeMultiplayerView';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
@@ -31,7 +34,10 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
   const { playMove, playWin, playDraw, playReset, playClick } = useAudio();
   const [mode, setMode] = useState<TicTacToeMode>('pvc'); // Player vs Computer by default or PvP
   const [isOnlineMultiplayer, setIsOnlineMultiplayer] = useState<boolean>(() =>
-    Boolean(loadActiveRoomSession('tic-tac-toe'))
+    Boolean(
+      loadActiveRoomSession('tic-tac-toe') ||
+        hasRoomInvitationInUrl('tic-tac-toe')
+    )
   );
   const [board, setBoard] = useState<BoardState>(createEmptyBoard);
   const [currentPlayer, setCurrentPlayer] = useState<Player>('X');

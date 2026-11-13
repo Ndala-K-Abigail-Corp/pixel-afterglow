@@ -39,7 +39,10 @@ import {
 } from '../../logic/memoryMatch';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
-import { loadActiveRoomSession } from '../../logic/multiplayerRoom';
+import {
+  loadActiveRoomSession,
+  hasRoomInvitationInUrl,
+} from '../../logic/multiplayerRoom';
 import { MemoryMatchMultiplayerView } from './MemoryMatchMultiplayerView';
 import { MemorySymbolIcon } from './MemorySymbolIcon';
 import { useAudio } from '../../context/AudioContext';
@@ -54,7 +57,10 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
   // Screen phase: 'setup' lets user pick Mode & Difficulty; 'playing' renders the active board
   const [phase, setPhase] = useState<'setup' | 'playing'>('setup');
   const [isOnlineMultiplayer, setIsOnlineMultiplayer] = useState<boolean>(() =>
-    Boolean(loadActiveRoomSession('memory-match'))
+    Boolean(
+      loadActiveRoomSession('memory-match') ||
+        hasRoomInvitationInUrl('memory-match')
+    )
   );
   const [mode, setMode] = useState<MemoryGameMode>('time-challenge');
   const [difficulty, setDifficulty] = useState<MemoryDifficulty>('medium');
@@ -512,7 +518,7 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
           </h1>
           <p className="text-xs sm:text-sm text-[#FFF0D7]/80 max-w-lg mx-auto leading-relaxed">
             {isOnlineMultiplayer
-              ? 'Compete in real time with 2–4 players on a shared 20, 40, or 60-card arcade board.'
+              ? 'Compete in real time with 2–8 players on a shared 20, 40, 60, or 100-card arcade board.'
               : 'Flip retro arcade cards two at a time to uncover matching pixel pairs. Choose your challenge mode and board size below.'}
           </p>
 
@@ -552,7 +558,7 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
                 data-testid="memory-mode-online"
               >
                 <Globe className="w-3.5 h-3.5 shrink-0" />
-                <span>Online Multiplayer (2–4P)</span>
+                <span>Online Multiplayer (2–8P)</span>
               </button>
             </div>
           </div>

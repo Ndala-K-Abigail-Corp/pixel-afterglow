@@ -6,20 +6,25 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import {
   buildInitialRoomDocument,
   applyPlayerJoinOrReconnect,
 } from './multiplayerRoom';
+import { MemoryMatchBoardStateSchema } from '../schemas/multiplayerSchemas';
 import {
   createMultiplayerMemoryDeck,
   applyStartMemoryMatchGame,
   applySelectMemoryMatchCard,
   applyResolveMemoryMatchMismatch,
+  applyStartMemoryMatchRematch,
   MEMORY_PLAYER_COLOR_PALETTE,
+  MULTIPLAYER_MEMORY_SYMBOLS,
+  MEMORY_SYMBOL_ICON_IDS,
   getMemoryPlayerColor,
   getMatchedCardOwnerColor,
 } from './memoryMatchMultiplayer';
+import { MemorySymbolIcon } from '../components/game/MemorySymbolIcon';
 import type {
   MemoryMultiplayerPlayerCount,
   MultiplayerRoomDocument,
@@ -32,17 +37,24 @@ vi.mock('../hooks/useMultiplayerRoom', () => ({
 }));
 
 vi.mock('../context/AudioContext', () => ({
+  AudioProvider: ({ children }: { children: React.ReactNode }) => children,
   useAudio: () => ({
+    isMuted: false,
+    toggleMute: vi.fn(),
     playFlip: vi.fn(),
     playMatch: vi.fn(),
     playMismatch: vi.fn(),
     playWin: vi.fn(),
     playDraw: vi.fn(),
+    playReset: vi.fn(),
     playClick: vi.fn(),
+    playMove: vi.fn(),
   }),
 }));
 
 import { MemoryMatchMultiplayerView } from '../components/game/MemoryMatchMultiplayerView';
+import App from '../App';
+import { MULTIPLAYER_USER_MESSAGES } from '../utils/multiplayerErrors';
 
 describe('Phase 4 – Multiplayer Memory Match Logic', () => {
   const BASE_NOW = 1_700_000_000_000;
@@ -68,69 +80,251 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
     return room;
   }
 
-  it('creates 20 cards (10 pairs) for 2P, 40 cards (20 pairs) for 3P, and 60 cards (30 pairs) for 4P', () => {
-    const deck2P = createMultiplayerMemoryDeck(2);
-    expect(deck2P).toHaveLength(20);
+  it.each([
+    { playerCount: 2 as const, expectedCards: 20, expectedPairs: 10 },
+    { playerCount: 3 as const, expectedCards: 40, expectedPairs: 20 },
+    { playerCount: 4 as const, expectedCards: 60, expectedPairs: 30 },
+    { playerCount: 5 as const, expectedCards: 100, expectedPairs: 50 },
+    { playerCount: 6 as const, expectedCards: 100, expectedPairs: 50 },
+    { playerCount: 7 as const, expectedCards: 100, expectedPairs: 50 },
+    { playerCount: 8 as const, expectedCards: 100, expectedPairs: 50 },
+  ])(
+    'creates $expectedCards cards ($expectedPairs unique symbol pairs) for $playerCount players with no duplicate symbolIds or Roman numeral badges',
+    ({ playerCount, expectedCards, expectedPairs }) => {
+      const deck = createMultiplayerMemoryDeck(playerCount);
+      expect(deck).toHaveLength(expectedCards);
 
-    const deck3P = createMultiplayerMemoryDeck(3);
-    expect(deck3P).toHaveLength(40);
+      const symbolCounts = new Map<string, number>();
+      const cardIds = new Set<number>();
 
-    const deck4P = createMultiplayerMemoryDeck(4);
-    expect(deck4P).toHaveLength(60);
+      for (const card of deck) {
+        expect(card.badgeLabel).toBeUndefined();
+        expect(card.name).not.toMatch(/\b(I|II|III)\b$/);
+        expect(card.pairKey).toBe(card.symbolId);
+        cardIds.add(card.id);
+        symbolCounts.set(card.symbolId, (symbolCounts.get(card.symbolId) ?? 0) + 1);
+      }
 
-    // Verify every pairKey in the 60-card deck has exactly 2 cards
-    const pairCounts = new Map<string, number>();
-    for (const card of deck4P) {
-      pairCounts.set(card.pairKey, (pairCounts.get(card.pairKey) ?? 0) + 1);
+      // Every card has a unique cardId (0..N-1) and every symbolId appears on exactly 2 cards
+      expect(cardIds.size).toBe(expectedCards);
+      expect(symbolCounts.size).toBe(expectedPairs);
+      for (const count of symbolCounts.values()) {
+        expect(count).toBe(2);
+      }
     }
-    expect(pairCounts.size).toBe(30);
-    for (const count of pairCounts.values()) {
-      expect(count).toBe(2);
+  );
+
+  it('provides 50 genuinely distinct pixel-art symbols where every symbolId renders a unique SVG icon', () => {
+    expect(MULTIPLAYER_MEMORY_SYMBOLS).toHaveLength(50);
+    expect(MEMORY_SYMBOL_ICON_IDS).toHaveLength(50);
+
+    const symbolIds = new Set<string>();
+    const symbolNames = new Set<string>();
+    const svgSignatures = new Set<string>();
+
+    for (const sym of MULTIPLAYER_MEMORY_SYMBOLS) {
+      expect(symbolIds.has(sym.symbolId)).toBe(false);
+      expect(symbolNames.has(sym.name)).toBe(false);
+      symbolIds.add(sym.symbolId);
+      symbolNames.add(sym.name);
+
+      const { container, unmount } = render(
+        React.createElement(MemorySymbolIcon, {
+          symbolId: sym.symbolId,
+          color: sym.color,
+        })
+      );
+      const svg = container.querySelector('svg');
+      expect(svg).not.toBeNull();
+      const innerPaths = svg!.innerHTML;
+      expect(svgSignatures.has(innerPaths)).toBe(false);
+      svgSignatures.add(innerPaths);
+      unmount();
     }
   });
 
-  it('prevents host from starting until the selected player count (2, 3, or 4) has joined', () => {
-    const waiting3P = buildInitialRoomDocument({
-      roomCode: 'MEM333',
+  it('allows up to 8 players to join an 8-player room and prevents a 9th player from joining', () => {
+    const room8P = createReadyMemoryRoom(8);
+    expect(room8P.playerOrder).toHaveLength(8);
+    expect(Object.keys(room8P.players)).toHaveLength(8);
+
+    expect(() =>
+      applyPlayerJoinOrReconnect({
+        room: room8P,
+        uid: 'p9',
+        nickname: 'Player9',
+        nowMs: BASE_NOW + 900,
+      })
+    ).toThrow(/This room is full\. Try joining another room\./i);
+  });
+
+  it.each([
+    // 2-player capacity: rejected at 1, permitted at 2 (20 cards / 10 pairs)
+    { capacity: 2 as const, joined: 1, canStart: false, expectedCards: 0, expectedPairs: 0 },
+    { capacity: 2 as const, joined: 2, canStart: true, expectedCards: 20, expectedPairs: 10 },
+    // 3-player capacity: rejected at 2, permitted at 3 (40 cards / 20 pairs)
+    { capacity: 3 as const, joined: 2, canStart: false, expectedCards: 0, expectedPairs: 0 },
+    { capacity: 3 as const, joined: 3, canStart: true, expectedCards: 40, expectedPairs: 20 },
+    // 4-player capacity: rejected at 2, permitted at 3 (40 cards) and 4 (60 cards)
+    { capacity: 4 as const, joined: 2, canStart: false, expectedCards: 0, expectedPairs: 0 },
+    { capacity: 4 as const, joined: 3, canStart: true, expectedCards: 40, expectedPairs: 20 },
+    { capacity: 4 as const, joined: 4, canStart: true, expectedCards: 60, expectedPairs: 30 },
+    // 5-player capacity: permitted at 3 (40 cards), 4 (60 cards), and 5 (100 cards)
+    { capacity: 5 as const, joined: 2, canStart: false, expectedCards: 0, expectedPairs: 0 },
+    { capacity: 5 as const, joined: 3, canStart: true, expectedCards: 40, expectedPairs: 20 },
+    { capacity: 5 as const, joined: 4, canStart: true, expectedCards: 60, expectedPairs: 30 },
+    { capacity: 5 as const, joined: 5, canStart: true, expectedCards: 100, expectedPairs: 50 },
+    // 8-player capacity: rejected at 2, permitted at 3, 4, 5, 6, 7, and 8
+    { capacity: 8 as const, joined: 2, canStart: false, expectedCards: 0, expectedPairs: 0 },
+    { capacity: 8 as const, joined: 3, canStart: true, expectedCards: 40, expectedPairs: 20 },
+    { capacity: 8 as const, joined: 4, canStart: true, expectedCards: 60, expectedPairs: 30 },
+    { capacity: 8 as const, joined: 5, canStart: true, expectedCards: 100, expectedPairs: 50 },
+    { capacity: 8 as const, joined: 6, canStart: true, expectedCards: 100, expectedPairs: 50 },
+    { capacity: 8 as const, joined: 7, canStart: true, expectedCards: 100, expectedPairs: 50 },
+    { capacity: 8 as const, joined: 8, canStart: true, expectedCards: 100, expectedPairs: 50 },
+  ])(
+    'enforces flexible minimum player requirements (capacity $capacity, joined $joined -> canStart: $canStart) and generates board for actual participating players',
+    ({ capacity, joined, canStart, expectedCards, expectedPairs }) => {
+      let room = buildInitialRoomDocument({
+        roomCode: 'FLX123',
+        gameType: 'memory-match',
+        hostUid: 'p1',
+        hostNickname: 'Player1',
+        maxPlayers: capacity,
+        nowMs: BASE_NOW,
+      });
+
+      for (let i = 2; i <= joined; i++) {
+        room = applyPlayerJoinOrReconnect({
+          room,
+          uid: `p${i}`,
+          nickname: `Player${i}`,
+          nowMs: BASE_NOW + i * 100,
+        });
+      }
+
+      if (!canStart) {
+        expect(() =>
+          applyStartMemoryMatchGame({
+            room,
+            callerUid: 'p1',
+            nowMs: BASE_NOW + 1000,
+          })
+        ).toThrow(/Waiting for players/i);
+        return;
+      }
+
+      const started = applyStartMemoryMatchGame({
+        room,
+        callerUid: 'p1',
+        nowMs: BASE_NOW + 1000,
+        randomFn: () => 0.5,
+      });
+
+      // Preserves original room capacity, locks membership, and uses only actual joined players
+      expect(started.status).toBe('in_progress');
+      expect(started.maxPlayers).toBe(capacity);
+      expect(started.playerOrder).toHaveLength(joined);
+      expect(Object.keys(started.players)).toHaveLength(joined);
+      expect(started.memoryMatchState?.turnOrderUids).toEqual(started.playerOrder);
+      expect(started.memoryMatchState?.cards).toHaveLength(expectedCards);
+      expect(started.memoryMatchState?.totalPairs).toBe(expectedPairs);
+      expect(started.currentTurnUid).toBe('p1');
+
+      // New players cannot join once the game starts even if capacity had open slots
+      expect(() =>
+        applyPlayerJoinOrReconnect({
+          room: started,
+          uid: 'late-guest',
+          nickname: 'LateGuest',
+          nowMs: BASE_NOW + 1500,
+        })
+      ).toThrow(/already started/i);
+    }
+  );
+
+  it('displays waiting room readiness status, minimum requirement, and enables Start Match when 3 of 8 players have joined', () => {
+    const liveNow = Date.now();
+    let room = buildInitialRoomDocument({
+      roomCode: 'WTR888',
       gameType: 'memory-match',
       hostUid: 'p1',
       hostNickname: 'Player1',
-      maxPlayers: 3,
-      nowMs: BASE_NOW,
+      maxPlayers: 8,
+      nowMs: liveNow,
     });
-    const withTwoJoined = applyPlayerJoinOrReconnect({
-      room: waiting3P,
+    room = applyPlayerJoinOrReconnect({
+      room,
       uid: 'p2',
       nickname: 'Player2',
-      nowMs: BASE_NOW + 100,
+      nowMs: liveNow + 100,
     });
 
-    // Only 2 of 3 players joined -> cannot start
-    expect(() =>
-      applyStartMemoryMatchGame({
-        room: withTwoJoined,
-        callerUid: 'p1',
-        nowMs: BASE_NOW + 200,
-      })
-    ).toThrow(/Waiting for players/i);
+    // 1. With 2 of 8 joined (< minimum 3), Start Match is disabled and waiting message is shown
+    mockUseMultiplayerRoom.mockReturnValue({
+      room,
+      uid: 'p1',
+      isHost: true,
+      isLoading: false,
+      isReconnecting: false,
+      error: null,
+      preferredNickname: 'Player1',
+      createRoom: vi.fn(),
+      joinRoom: vi.fn(),
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: vi.fn(),
+    });
 
-    const withAllThreeJoined = applyPlayerJoinOrReconnect({
-      room: withTwoJoined,
+    const view2Of8 = render(
+      React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
+    );
+    expect(screen.getByTestId('waiting-room-player-count').textContent).toContain(
+      '2 of 8 players joined'
+    );
+    expect(screen.getByTestId('waiting-room-capacity-info').textContent).toContain(
+      'Max 8P · Min 3P Required'
+    );
+    expect(screen.getByTestId('waiting-room-status-banner').textContent).toContain(
+      '2 of 8 players joined – Waiting for 1 more player (minimum 3 required)'
+    );
+    expect(
+      (screen.getByTestId('host-start-game-btn') as HTMLButtonElement).disabled
+    ).toBe(true);
+    view2Of8.unmount();
+
+    // 2. When 3rd player joins (3 of 8), Start Match becomes enabled and shows "3 of 8 players joined – Ready to start!"
+    const room3Of8 = applyPlayerJoinOrReconnect({
+      room,
       uid: 'p3',
       nickname: 'Player3',
-      nowMs: BASE_NOW + 300,
+      nowMs: liveNow + 200,
+    });
+    mockUseMultiplayerRoom.mockReturnValue({
+      room: room3Of8,
+      uid: 'p1',
+      isHost: true,
+      isLoading: false,
+      isReconnecting: false,
+      error: null,
+      preferredNickname: 'Player1',
+      createRoom: vi.fn(),
+      joinRoom: vi.fn(),
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: vi.fn(),
     });
 
-    const started = applyStartMemoryMatchGame({
-      room: withAllThreeJoined,
-      callerUid: 'p1',
-      nowMs: BASE_NOW + 400,
-    });
-
-    expect(started.status).toBe('in_progress');
-    expect(started.memoryMatchState?.cards).toHaveLength(40);
-    expect(started.memoryMatchState?.totalPairs).toBe(20);
-    expect(started.currentTurnUid).toBe('p1');
+    const view3Of8 = render(
+      React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
+    );
+    expect(screen.getByTestId('waiting-room-status-banner').textContent).toContain(
+      '3 of 8 players joined – Ready to start!'
+    );
+    const startBtn = screen.getByTestId('host-start-game-btn') as HTMLButtonElement;
+    expect(startBtn.disabled).toBe(false);
+    expect(startBtn.textContent).toContain('Start Match');
+    view3Of8.unmount();
   });
 
   it('awards +1 point and an extra turn on a match, and passes turn after mismatch reveal', () => {
@@ -305,11 +499,26 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
     expect(flip2.nextRoom.memoryMatchState?.winnerUids).toEqual(['p1', 'p2']);
   });
 
-  describe('Player-owned matched card colours (2, 3, and 4 players)', () => {
+  describe('Player-owned matched card colours (2 to 8 players)', () => {
+    const ALL_EIGHT_COLORS = [
+      '#3B82F6',
+      '#EF4444',
+      '#22C55E',
+      '#A855F7',
+      '#F97316',
+      '#EC4899',
+      '#EAB308',
+      '#06B6D4',
+    ] as const;
+
     it.each([
-      { playerCount: 2 as const, expectedColors: ['#3B82F6', '#EF4444'] },
-      { playerCount: 3 as const, expectedColors: ['#3B82F6', '#EF4444', '#22C55E'] },
-      { playerCount: 4 as const, expectedColors: ['#3B82F6', '#EF4444', '#22C55E', '#A855F7'] },
+      { playerCount: 2 as const, expectedColors: ALL_EIGHT_COLORS.slice(0, 2) },
+      { playerCount: 3 as const, expectedColors: ALL_EIGHT_COLORS.slice(0, 3) },
+      { playerCount: 4 as const, expectedColors: ALL_EIGHT_COLORS.slice(0, 4) },
+      { playerCount: 5 as const, expectedColors: ALL_EIGHT_COLORS.slice(0, 5) },
+      { playerCount: 6 as const, expectedColors: ALL_EIGHT_COLORS.slice(0, 6) },
+      { playerCount: 7 as const, expectedColors: ALL_EIGHT_COLORS.slice(0, 7) },
+      { playerCount: 8 as const, expectedColors: ALL_EIGHT_COLORS.slice(0, 8) },
     ])(
       'assigns deterministic colours for $playerCount players, applies identical colour to both cards in each matched pair, preserves ownership across subsequent turns & reconnects, and never colours mismatched or unmatched cards',
       ({ playerCount, expectedColors }) => {
@@ -489,13 +698,10 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
       }
     );
 
-    it.each([2 as const, 3 as const, 4 as const])(
+    it.each([2 as const, 3 as const, 4 as const, 5 as const, 6 as const, 7 as const, 8 as const])(
       'renders player score cards, colour legend, and matched card borders/tints/icons in MemoryMatchMultiplayerView for %i players',
       (playerCount) => {
-        const expectedColors = ['#3B82F6', '#EF4444', '#22C55E', '#A855F7'].slice(
-          0,
-          playerCount
-        );
+        const expectedColors = ALL_EIGHT_COLORS.slice(0, playerCount);
 
         let room = applyStartMemoryMatchGame({
           room: createReadyMemoryRoom(playerCount),
@@ -596,5 +802,529 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
         unmount();
       }
     );
+  });
+});
+
+describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
+  const NOW = 1_700_000_000_000;
+
+  function readyRoom(
+    playerCount: MemoryMultiplayerPlayerCount,
+    baseNow = NOW
+  ): MultiplayerRoomDocument {
+    let room = buildInitialRoomDocument({
+      roomCode: 'RND123',
+      gameType: 'memory-match',
+      hostUid: 'p1',
+      hostNickname: 'Player1',
+      maxPlayers: playerCount,
+      nowMs: baseNow,
+    });
+    for (let i = 2; i <= playerCount; i++) {
+      room = applyPlayerJoinOrReconnect({
+        room,
+        uid: `p${i}`,
+        nickname: `Player${i}`,
+        nowMs: baseNow + i * 10,
+      });
+    }
+    return room;
+  }
+
+  /** Plays a whole round with the active player (p1) matching every pair in order. */
+  function playRoundToCompletion(room: MultiplayerRoomDocument, startMs: number): MultiplayerRoomDocument {
+    let current = room;
+    let t = startMs;
+    const cards = current.memoryMatchState!.cards;
+    const seen = new Set<string>();
+    for (const card of cards) {
+      if (seen.has(card.pairKey)) continue;
+      seen.add(card.pairKey);
+      const other = cards.find((c) => c.pairKey === card.pairKey && c.id !== card.id)!;
+      current = applySelectMemoryMatchCard({ room: current, callerUid: current.currentTurnUid!, cardId: card.id, nowMs: (t += 10) }).nextRoom;
+      current = applySelectMemoryMatchCard({ room: current, callerUid: current.currentTurnUid!, cardId: other.id, nowMs: (t += 10) }).nextRoom;
+    }
+    return current;
+  }
+
+  it.each([
+    { playerCount: 2 as const, cards: 20, pairs: 10 },
+    { playerCount: 3 as const, cards: 40, pairs: 20 },
+    { playerCount: 4 as const, cards: 60, pairs: 30 },
+    { playerCount: 5 as const, cards: 100, pairs: 50 },
+    { playerCount: 6 as const, cards: 100, pairs: 50 },
+    { playerCount: 7 as const, cards: 100, pairs: 50 },
+    { playerCount: 8 as const, cards: 100, pairs: 50 },
+  ])(
+    'allows the host to immediately start repeated rematch rounds without waiting for other players ($playerCount players)',
+    ({ playerCount, cards, pairs }) => {
+      let t = NOW + 1000;
+      let room = applyStartMemoryMatchGame({
+        room: readyRoom(playerCount),
+        callerUid: 'p1',
+        nowMs: t,
+        randomFn: () => 0.5,
+      });
+      expect(room.memoryMatchState!.roundNumber).toBe(1);
+
+      for (let round = 1; round <= 3; round++) {
+        room = playRoundToCompletion(room, (t += 1000));
+        expect(room.status).toBe('completed');
+        expect(room.memoryMatchState!.matchedPairs).toBe(pairs);
+        expect(room.players['p1'].score).toBe(pairs);
+        expect(room.memoryMatchState!.winnerUids).toEqual(['p1']);
+
+        const previousOrder = room.playerOrder;
+        const previousBoard = room.memoryMatchState!.cards.map((c) => c.pairKey).join(',');
+        const previousRound = room.memoryMatchState!.roundNumber!;
+
+        // Non-host can never start the next round
+        expect(() =>
+          applyStartMemoryMatchRematch({ room, callerUid: 'p2', nowMs: t + 10 })
+        ).toThrow(/Only the room host/i);
+
+        // Host can immediately start the next round without requiring any guest readiness confirmation
+        t += 2000;
+        const next = applyStartMemoryMatchRematch({
+          room,
+          callerUid: 'p1',
+          nowMs: t,
+          randomFn: () => (round % 2 === 0 ? 0.5 : 0.1),
+        });
+
+        // Same room, host, membership and order; new round
+        expect(next.roomCode).toBe('RND123');
+        expect(next.hostUid).toBe('p1');
+        expect(next.status).toBe('in_progress');
+        expect(next.playerOrder).toEqual(previousOrder);
+        expect(Object.keys(next.players).sort()).toEqual(Object.keys(room.players).sort());
+        expect(next.memoryMatchState!.roundNumber).toBe(previousRound + 1);
+
+        // Fresh board with correct size, reshuffled
+        const nextMM = next.memoryMatchState!;
+        expect(nextMM.cards).toHaveLength(cards);
+        expect(nextMM.totalPairs).toBe(pairs);
+        expect(nextMM.cards.map((c) => c.pairKey).join(',')).not.toBe(previousBoard);
+        expect(nextMM.cards.every((c) => !c.isFlipped && !c.isMatched && c.matchedByUid === null)).toBe(true);
+
+        // Everything else reset
+        expect(nextMM.matchedPairs).toBe(0);
+        expect(nextMM.matchedByPairKey).toEqual({});
+        expect(nextMM.flippedCardIds).toEqual([]);
+        expect(nextMM.pendingResetAt).toBeNull();
+        expect(nextMM.winnerUids).toEqual([]);
+        expect(nextMM.isTie).toBe(false);
+        expect(next.currentTurnUid).toBe(previousOrder[0]);
+        expect(nextMM.currentTurnUid).toBe(previousOrder[0]);
+        for (const p of Object.values(next.players)) {
+          expect(p.score).toBe(0);
+          expect(p.rematchAccepted).toBe(false);
+        }
+        expect(next.completedAt).toBeNull();
+        expect(next.expiresAt).toBeGreaterThan(room.expiresAt - 1);
+
+        // A second (stale/concurrent) start against the new in-progress room is rejected
+        expect(() =>
+          applyStartMemoryMatchRematch({ room: next, callerUid: 'p1', nowMs: t + 5 })
+        ).toThrow(/completed game/i);
+
+        room = next;
+      }
+    }
+  );
+
+  it('displays host Play Again button immediately on completion and shows GET READY – ROUND 2! transition to all players', () => {
+    const liveNow = Date.now();
+    let room = applyStartMemoryMatchGame({
+      room: readyRoom(3, liveNow),
+      callerUid: 'p1',
+      nowMs: liveNow + 100,
+      randomFn: () => 0.5,
+    });
+    room = playRoundToCompletion(room, liveNow + 1000);
+    expect(room.status).toBe('completed');
+
+    // 1. Host sees prominent Play Again button immediately without any waiting-for-players screen
+    mockUseMultiplayerRoom.mockReturnValue({
+      room,
+      uid: 'p1',
+      isHost: true,
+      isLoading: false,
+      isReconnecting: false,
+      error: null,
+      preferredNickname: 'Player1',
+      createRoom: vi.fn(),
+      joinRoom: vi.fn(),
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: vi.fn(),
+    });
+
+    const hostView = render(
+      React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
+    );
+    const playAgainBtn = screen.getByTestId('mp-memory-play-again-btn') as HTMLButtonElement;
+    expect(playAgainBtn.disabled).toBe(false);
+    expect(playAgainBtn.textContent).toContain('Play Again');
+
+    // 2. When host starts Round 2, all connected players automatically transition and see "GET READY – ROUND 2!"
+    const round2Room = applyStartMemoryMatchRematch({
+      room,
+      callerUid: 'p1',
+      nowMs: liveNow + 2000,
+      randomFn: () => 0.2,
+    });
+    mockUseMultiplayerRoom.mockReturnValue({
+      room: round2Room,
+      uid: 'p2',
+      isHost: false,
+      isLoading: false,
+      isReconnecting: false,
+      error: null,
+      preferredNickname: 'Player2',
+      createRoom: vi.fn(),
+      joinRoom: vi.fn(),
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: vi.fn(),
+    });
+
+    hostView.rerender(
+      React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
+    );
+    expect(screen.getByTestId('mp-memory-round-transition').textContent).toContain(
+      'GET READY – ROUND 2!'
+    );
+    expect(screen.getByTestId('mp-memory-round-indicator').textContent).toContain('ROUND 2');
+    hostView.unmount();
+  });
+
+  it('preserves original room maxPlayers capacity and generates board for actual participating players during rematches (e.g., 3 players in an 8-player room)', () => {
+    let waiting8Cap = buildInitialRoomDocument({
+      roomCode: 'CAP803',
+      gameType: 'memory-match',
+      hostUid: 'p1',
+      hostNickname: 'Player1',
+      maxPlayers: 8,
+      nowMs: NOW,
+    });
+    waiting8Cap = applyPlayerJoinOrReconnect({
+      room: waiting8Cap,
+      uid: 'p2',
+      nickname: 'Player2',
+      nowMs: NOW + 10,
+    });
+    waiting8Cap = applyPlayerJoinOrReconnect({
+      room: waiting8Cap,
+      uid: 'p3',
+      nickname: 'Player3',
+      nowMs: NOW + 20,
+    });
+
+    // Start Round 1 with 3 of 8 players -> 40 cards (20 pairs), maxPlayers remains 8
+    let round1 = applyStartMemoryMatchGame({
+      room: waiting8Cap,
+      callerUid: 'p1',
+      nowMs: NOW + 100,
+      randomFn: () => 0.5,
+    });
+    expect(round1.maxPlayers).toBe(8);
+    expect(round1.playerOrder).toEqual(['p1', 'p2', 'p3']);
+    expect(round1.memoryMatchState!.cards).toHaveLength(40);
+    expect(round1.memoryMatchState!.totalPairs).toBe(20);
+
+    round1 = playRoundToCompletion(round1, NOW + 500);
+    expect(round1.status).toBe('completed');
+
+    // Host immediately starts Round 2 without waiting for guest votes -> keeps maxPlayers = 8, generates 40 cards (20 pairs)
+    const round2 = applyStartMemoryMatchRematch({
+      room: round1,
+      callerUid: 'p1',
+      nowMs: NOW + 5100,
+      randomFn: () => 0.2,
+    });
+    expect(round2.status).toBe('in_progress');
+    expect(round2.maxPlayers).toBe(8);
+    expect(round2.playerOrder).toEqual(['p1', 'p2', 'p3']);
+    expect(round2.memoryMatchState!.roundNumber).toBe(2);
+    expect(round2.memoryMatchState!.cards).toHaveLength(40);
+    expect(round2.memoryMatchState!.totalPairs).toBe(20);
+  });
+
+  it('renders exactly 4 room-capacity selection options (2P, 3P, 4P, 5–8P) in lobby creation and passes maxPlayers = 8 for 5–8P', async () => {
+    const mockCreateRoom = vi.fn().mockResolvedValue(null);
+    mockUseMultiplayerRoom.mockReturnValue({
+      room: null,
+      uid: 'p1',
+      isHost: false,
+      isLoading: false,
+      isReconnecting: false,
+      error: null,
+      preferredNickname: 'HostHero',
+      createRoom: mockCreateRoom,
+      joinRoom: vi.fn(),
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: vi.fn(),
+    });
+
+    const view = render(
+      React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
+    );
+
+    const optionsContainer = screen.getByTestId('memory-capacity-options');
+    const optionButtons = optionsContainer.querySelectorAll('button');
+    expect(optionButtons).toHaveLength(4);
+
+    const btn2P = screen.getByTestId('select-players-2');
+    const btn3P = screen.getByTestId('select-players-3');
+    const btn4P = screen.getByTestId('select-players-4');
+    const btn5To8P = screen.getByTestId('select-players-8');
+
+    expect(btn2P.textContent).toContain('2P');
+    expect(btn2P.textContent).toContain('Min 2P');
+    expect(btn2P.textContent).toContain('20 Cards');
+    expect(btn2P.textContent).toContain('10 Pairs');
+
+    expect(btn3P.textContent).toContain('3P');
+    expect(btn3P.textContent).toContain('Min 3P');
+    expect(btn3P.textContent).toContain('40 Cards');
+    expect(btn3P.textContent).toContain('20 Pairs');
+
+    expect(btn4P.textContent).toContain('4P');
+    expect(btn4P.textContent).toContain('Min 3P');
+    expect(btn4P.textContent).toContain('60 Cards');
+    expect(btn4P.textContent).toContain('30 Pairs');
+
+    expect(btn5To8P.textContent).toContain('5–8P');
+    expect(btn5To8P.textContent).toContain('Min 3P');
+    expect(btn5To8P.textContent).toContain('100 Cards');
+    expect(btn5To8P.textContent).toContain('50 Pairs');
+
+    // Separate 5P, 6P, 7P buttons must not exist
+    expect(screen.queryByTestId('select-players-5')).toBeNull();
+    expect(screen.queryByTestId('select-players-6')).toBeNull();
+    expect(screen.queryByTestId('select-players-7')).toBeNull();
+
+    // Selecting 5–8P and submitting creates a room with maxPlayers: 8
+    fireEvent.click(btn5To8P);
+    fireEvent.click(screen.getByTestId('submit-create-room'));
+    expect(mockCreateRoom).toHaveBeenCalledWith({
+      nickname: 'HostHero',
+      maxPlayers: 8,
+    });
+
+    view.unmount();
+  });
+
+  it('ignores stale mismatch resolution timers from an earlier round and validates all board sizes with Zod', () => {
+    let round1 = applyStartMemoryMatchGame({
+      room: readyRoom(2),
+      callerUid: 'p1',
+      nowMs: NOW,
+      randomFn: () => 0.999999,
+    });
+
+    // Validate generated board states with Zod across 20, 40, 60, and 100 cards
+    for (const pCount of [2, 3, 4, 8] as const) {
+      const started = applyStartMemoryMatchGame({
+        room: readyRoom(pCount),
+        callerUid: 'p1',
+        nowMs: NOW,
+      });
+      expect(MemoryMatchBoardStateSchema.safeParse(started.memoryMatchState).success).toBe(true);
+    }
+
+    round1 = playRoundToCompletion(round1, NOW + 500);
+    const round2 = applyStartMemoryMatchRematch({
+      room: round1,
+      callerUid: 'p1',
+      nowMs: NOW + 2000,
+    });
+
+    // Flip two mismatched cards in Round 2
+    const c1 = round2.memoryMatchState!.cards[0];
+    const c2 = round2.memoryMatchState!.cards.find((c) => c.pairKey !== c1.pairKey)!;
+    const afterFlip1 = applySelectMemoryMatchCard({
+      room: round2,
+      callerUid: 'p1',
+      cardId: c1.id,
+      nowMs: NOW + 2100,
+    }).nextRoom;
+    const afterFlip2 = applySelectMemoryMatchCard({
+      room: afterFlip1,
+      callerUid: 'p1',
+      cardId: c2.id,
+      nowMs: NOW + 2200,
+    }).nextRoom;
+
+    expect(afterFlip2.memoryMatchState!.pendingResetAt).not.toBeNull();
+
+    // A stale mismatch-resolution timer scoped to Round 1 must NOT touch Round 2's cards
+    const afterStaleRound1Timer = applyResolveMemoryMatchMismatch({
+      room: afterFlip2,
+      nowMs: NOW + 2500,
+      expectedRoundNumber: 1,
+    });
+    expect(afterStaleRound1Timer).toBe(afterFlip2);
+    expect(afterStaleRound1Timer.memoryMatchState!.flippedCardIds).toHaveLength(2);
+
+    // Resolving with the matching Round 2 number turns the mismatched cards face down
+    const afterRound2Timer = applyResolveMemoryMatchMismatch({
+      room: afterFlip2,
+      nowMs: NOW + 2500,
+      expectedRoundNumber: 2,
+    });
+    expect(afterRound2Timer.memoryMatchState!.flippedCardIds).toEqual([]);
+  });
+
+  it('opens directly into Multiplayer Memory Match Join with Code tab when an invitation URL is opened, prefills the room code without auto-joining, and joins when nickname is submitted', () => {
+    window.scrollTo = vi.fn();
+    window.history.replaceState({}, '', '/?game=memory-match&room=NFGNTR');
+
+    const mockJoinRoom = vi.fn().mockResolvedValue(null);
+    mockUseMultiplayerRoom.mockReturnValue({
+      room: null,
+      uid: 'guest-uid',
+      isHost: false,
+      isLoading: false,
+      isReconnecting: false,
+      error: null,
+      preferredNickname: '',
+      invitedRoomCode: 'NFGNTR',
+      invitationStatus: 'joinable',
+      invitationRoomInfo: {
+        roomCode: 'NFGNTR',
+        joinedCount: 1,
+        maxPlayers: 4,
+        hostNickname: 'HostAce',
+      },
+      dismissInvitation: vi.fn(),
+      createRoom: vi.fn(),
+      joinRoom: mockJoinRoom,
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: vi.fn(),
+    });
+
+    const appView = render(React.createElement(App));
+
+    // 1. Opens directly in Memory Match Online Multiplayer Join tab
+    expect(screen.getByTestId('invitation-valid-banner').textContent).toContain(
+      'Invited to Room NFGNTR (1/4 players)'
+    );
+    const codeInput = screen.getByTestId('input-room-code') as HTMLInputElement;
+    expect(codeInput.value).toBe('NFGNTR');
+
+    // 2. Does NOT automatically join the room merely from opening the link
+    expect(mockJoinRoom).not.toHaveBeenCalled();
+
+    // 3. Recipient enters nickname and explicitly clicks Join Room
+    const nicknameInput = screen.getByTestId('input-nickname') as HTMLInputElement;
+    fireEvent.change(nicknameInput, { target: { value: 'PixelGuest' } });
+    fireEvent.click(screen.getByTestId('submit-join-room'));
+
+    expect(mockJoinRoom).toHaveBeenCalledWith({
+      roomCode: 'NFGNTR',
+      nickname: 'PixelGuest',
+    });
+
+    appView.unmount();
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('displays friendly error and Enter Another Room Code reset button when an invitation room is unavailable, and supports Share Room + Copy Link in the waiting room', async () => {
+    const mockDismissInvitation = vi.fn();
+    const mockClearError = vi.fn();
+
+    mockUseMultiplayerRoom.mockReturnValue({
+      room: null,
+      uid: 'guest-uid',
+      isHost: false,
+      isLoading: false,
+      isReconnecting: false,
+      error: MULTIPLAYER_USER_MESSAGES.ROOM_FULL,
+      preferredNickname: 'GuestPlayer',
+      invitedRoomCode: 'FUL999',
+      invitationStatus: 'unavailable',
+      invitationRoomInfo: null,
+      dismissInvitation: mockDismissInvitation,
+      createRoom: vi.fn(),
+      joinRoom: vi.fn(),
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: mockClearError,
+    });
+
+    const unavailableView = render(
+      React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
+    );
+
+    expect(screen.getByTestId('multiplayer-error-banner').textContent).toContain(
+      MULTIPLAYER_USER_MESSAGES.ROOM_FULL
+    );
+    const resetBtn = screen.getByTestId('invitation-reset-btn');
+    fireEvent.click(resetBtn);
+    expect(mockDismissInvitation).toHaveBeenCalledTimes(1);
+    expect((screen.getByTestId('input-room-code') as HTMLInputElement).value).toBe('');
+    unavailableView.unmount();
+
+    // Now test Waiting Room Share Room & Copy Link functionality
+    const waitingRoom = buildInitialRoomDocument({
+      roomCode: 'SHR234',
+      gameType: 'memory-match',
+      hostUid: 'p1',
+      hostNickname: 'HostPlayer',
+      maxPlayers: 4,
+      nowMs: Date.now(),
+    });
+
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      clipboard: { writeText: writeTextMock },
+      share: undefined,
+    });
+
+    mockUseMultiplayerRoom.mockReturnValue({
+      room: waitingRoom,
+      uid: 'p1',
+      isHost: true,
+      isLoading: false,
+      isReconnecting: false,
+      error: null,
+      preferredNickname: 'HostPlayer',
+      invitedRoomCode: null,
+      invitationStatus: 'idle',
+      invitationRoomInfo: null,
+      dismissInvitation: vi.fn(),
+      createRoom: vi.fn(),
+      joinRoom: vi.fn(),
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: vi.fn(),
+    });
+
+    const waitingView = render(
+      React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
+    );
+
+    // 1. Copy Link button copies the direct invitation URL with ?game=memory-match&room=SHR234
+    fireEvent.click(screen.getByTestId('copy-invite-link-btn'));
+    expect(writeTextMock).toHaveBeenCalledWith(
+      expect.stringContaining('/?game=memory-match&room=SHR234')
+    );
+
+    // 2. Share Room falls back to clipboard with invitation message + URL when navigator.share is unavailable
+    fireEvent.click(screen.getByTestId('share-room-btn'));
+    expect(writeTextMock).toHaveBeenLastCalledWith(
+      expect.stringContaining(
+        "You're invited to play Memory Match on Pixel Afterglow!"
+      )
+    );
+    expect(writeTextMock).toHaveBeenLastCalledWith(
+      expect.stringContaining('/?game=memory-match&room=SHR234')
+    );
+
+    waitingView.unmount();
   });
 });
