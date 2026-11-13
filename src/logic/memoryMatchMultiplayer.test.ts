@@ -1327,4 +1327,86 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
 
     waitingView.unmount();
   });
+
+  it('uses responsive 5-col mobile / 8-col small-tablet / 10-col tablet-desktop classes, compact 2-row 8-player scoreboard, and sticky status bar on the 100-card board', () => {
+    let readyRoom = buildInitialRoomDocument({
+      roomCode: 'MOB100',
+      gameType: 'memory-match',
+      hostUid: 'p1',
+      hostNickname: 'HostAlpha',
+      maxPlayers: 8,
+      nowMs: 1_700_000_000_000,
+    });
+    for (let i = 2; i <= 8; i++) {
+      readyRoom = applyPlayerJoinOrReconnect({
+        room: readyRoom,
+        uid: `p${i}`,
+        nickname: `Player${i}`,
+        nowMs: 1_700_000_000_000 + i,
+      });
+    }
+    const room = applyStartMemoryMatchGame({
+      room: readyRoom,
+      callerUid: 'p1',
+      nowMs: 1_700_000_000_100,
+    });
+
+    const onActiveGameChange = vi.fn();
+    mockUseMultiplayerRoom.mockReturnValue({
+      room,
+      uid: 'p1',
+      isHost: true,
+      isLoading: false,
+      isReconnecting: false,
+      error: null,
+      preferredNickname: 'HostAlpha',
+      createRoom: vi.fn(),
+      joinRoom: vi.fn(),
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: vi.fn(),
+    });
+
+    const { unmount } = render(
+      React.createElement(MemoryMatchMultiplayerView, {
+        onBackToHome: vi.fn(),
+        onActiveGameChange,
+      })
+    );
+
+    expect(onActiveGameChange).toHaveBeenCalledWith(true);
+
+    // 100-card board grid adapts: 5 cols on small mobile, 8 on sm, 10 on md+ desktop
+    const grid = screen.getByRole('grid', {
+      name: /Multiplayer Memory Match Board with 100 cards/i,
+    });
+    expect(grid.className).toContain('grid-cols-5');
+    expect(grid.className).toContain('sm:grid-cols-8');
+    expect(grid.className).toContain('md:grid-cols-10');
+    expect(grid.className).toContain('w-full');
+
+    // Every card uses dynamic width (w-full) and compact mobile height transitioning to square on sm+
+    const firstCard = screen.getByTestId('mp-memory-card-0');
+    expect(firstCard.className).toContain('w-full');
+    expect(firstCard.className).toContain('aspect-[4/3]');
+    expect(firstCard.className).toContain('sm:aspect-square');
+    expect(firstCard.className).toContain('touch-manipulation');
+
+    // 8-player scoreboard uses 4 columns (max 2 rows) on both mobile and desktop
+    const scoreboard = screen.getByTestId('mp-memory-scoreboard');
+    expect(scoreboard.className).toContain('grid-cols-4');
+    for (let i = 0; i < 8; i++) {
+      expect(screen.getByTestId(`mp-memory-player-${i}`)).toBeTruthy();
+      expect(screen.getByTestId(`mp-memory-score-${i}`)).toBeTruthy();
+    }
+
+    // Sticky mobile status bar stays compact and does not use fullscreen transforms
+    const turnBanner = screen.getByTestId('mp-memory-turn-banner');
+    expect(turnBanner.parentElement?.className).toContain('sticky');
+    expect(turnBanner.parentElement?.className).toContain('top-[52px]');
+    expect(turnBanner.parentElement?.className).toContain('sm:static');
+
+    unmount();
+    expect(onActiveGameChange).toHaveBeenLastCalledWith(false);
+  });
 });

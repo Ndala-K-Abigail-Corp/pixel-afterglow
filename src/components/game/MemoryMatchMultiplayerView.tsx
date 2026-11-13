@@ -38,11 +38,12 @@ import { useAudio } from '../../context/AudioContext';
 
 interface MemoryMatchMultiplayerViewProps {
   onBackToHome: () => void;
+  onActiveGameChange?: (isActive: boolean) => void;
 }
 
 export const MemoryMatchMultiplayerView: React.FC<
   MemoryMatchMultiplayerViewProps
-> = ({ onBackToHome }) => {
+> = ({ onBackToHome, onActiveGameChange }) => {
   const { playFlip, playMatch, playMismatch, playWin, playDraw, playClick } =
     useAudio();
   const {
@@ -79,6 +80,14 @@ export const MemoryMatchMultiplayerView: React.FC<
   const prevMatchedPairsRef = useRef<number>(0);
   const prevRoundNumberRef = useRef<number>(1);
   const roundTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isBoardActive = Boolean(room && room.status !== 'waiting' && room.memoryMatchState);
+  useEffect(() => {
+    onActiveGameChange?.(isBoardActive);
+    return () => {
+      onActiveGameChange?.(false);
+    };
+  }, [isBoardActive, onActiveGameChange]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -305,16 +314,24 @@ export const MemoryMatchMultiplayerView: React.FC<
     .join(' & ');
 
   // Responsive grid layout for 20, 40, 60, or 100 cards:
-  // - Desktop: 5x4 (20), 8x5 (40), 10x6 (60), 10x10 (100)
-  // - Mobile: 4-5 columns so cards remain large enough to tap comfortably and icons stay legible with vertical scrolling
+  // - Small mobile (<640px): 5 columns (4 for 20-card board) dynamically filling viewport width with compact height
+  // - Tablet (640px–767px): 8 columns for larger boards so cards stay readable & touch-friendly
+  // - Tablet/Desktop (>=768px): 5x4 (20), 8x5 (40), 10x6 (60), 10x10 (100)
   const gridClasses =
     totalCards <= 20
-      ? 'grid-cols-4 sm:grid-cols-5 max-w-[380px] sm:max-w-[540px] gap-2 sm:gap-2.5'
+      ? 'grid-cols-4 sm:grid-cols-5 w-full max-w-[380px] sm:max-w-[540px] gap-1.5 sm:gap-2.5'
       : totalCards <= 40
-      ? 'grid-cols-5 sm:grid-cols-8 max-w-[440px] sm:max-w-[740px] gap-1.5 sm:gap-2'
+      ? 'grid-cols-5 sm:grid-cols-8 w-full max-w-[460px] sm:max-w-[740px] gap-1 sm:gap-2'
       : totalCards <= 60
-      ? 'grid-cols-5 sm:grid-cols-10 max-w-[460px] sm:max-w-[880px] gap-1.5 sm:gap-1.5'
-      : 'grid-cols-5 sm:grid-cols-10 max-w-[460px] sm:max-w-[920px] gap-1.5 sm:gap-1.5';
+      ? 'grid-cols-5 sm:grid-cols-8 md:grid-cols-10 w-full sm:max-w-[740px] md:max-w-[880px] gap-1 sm:gap-1.5'
+      : 'grid-cols-5 sm:grid-cols-8 md:grid-cols-10 w-full sm:max-w-[760px] md:max-w-[920px] gap-1 sm:gap-1.5 lg:gap-2';
+
+  const cardAspectClass =
+    totalCards <= 20
+      ? 'aspect-square rounded-lg sm:rounded-xl'
+      : totalCards <= 40
+      ? 'aspect-[5/4] min-h-[42px] sm:min-h-0 sm:aspect-square rounded-lg sm:rounded-xl'
+      : 'aspect-[4/3] min-h-[42px] sm:min-h-0 sm:aspect-square rounded-md sm:rounded-xl';
 
   const iconSizeClass =
     totalCards <= 20
@@ -323,39 +340,53 @@ export const MemoryMatchMultiplayerView: React.FC<
       ? 'w-5 h-5 sm:w-7 sm:h-7'
       : 'w-5 h-5 sm:w-6 sm:h-6';
 
+  const scoreboardGridCols =
+    orderedPlayers.length === 2
+      ? 'grid-cols-2'
+      : orderedPlayers.length === 3
+      ? 'grid-cols-3'
+      : orderedPlayers.length === 4
+      ? 'grid-cols-4'
+      : orderedPlayers.length <= 6
+      ? 'grid-cols-3'
+      : 'grid-cols-4';
+
   return (
-    <div data-testid="memory-multiplayer-active">
+    <div data-testid="memory-multiplayer-active" className="pb-4 sm:pb-6">
       {isGameOver && (
         <WinCelebration winner={mm.isTie ? null : 'X'} isDraw={mm.isTie} />
       )}
 
       {/* Top Room Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 bg-[#201A36] border border-[#3D345F] rounded-xl px-3.5 py-2.5 mb-4 max-w-3xl mx-auto">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-['Press_Start_2P'] text-[#FFC66D]">
+      <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 bg-[#201A36] border border-[#3D345F] rounded-xl px-2.5 py-1.5 sm:px-3.5 sm:py-2.5 mb-2 sm:mb-3 max-w-4xl mx-auto">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
+          <span className="text-[9px] sm:text-[10px] font-['Press_Start_2P'] text-[#FFC66D]">
             ROOM {room.roomCode}
           </span>
           <button
             type="button"
             onClick={handleCopyCode}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#292342] hover:bg-[#56E0CB]/20 text-[#56E0CB] text-[10px] font-bold border border-[#56E0CB]/30 cursor-pointer"
+            className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded bg-[#292342] hover:bg-[#56E0CB]/20 text-[#56E0CB] text-[10px] font-bold border border-[#56E0CB]/30 cursor-pointer"
           >
             {copiedCode ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-            {copiedCode ? 'Copied' : 'Copy'}
+            <span className="hidden sm:inline">{copiedCode ? 'Copied' : 'Copy'}</span>
           </button>
-          <span className="inline-flex items-center gap-1 text-xs text-[#56E0CB] font-semibold">
-            <Layers className="w-3.5 h-3.5" />
-            Pairs: {mm.matchedPairs} / {mm.totalPairs}
+          <span className="inline-flex items-center gap-1 text-[11px] sm:text-xs text-[#56E0CB] font-semibold">
+            <Layers className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />
+            <span>
+              <span className="hidden sm:inline">Pairs: </span>
+              {mm.matchedPairs}/{mm.totalPairs}
+            </span>
           </span>
           <span
-            className="inline-flex items-center gap-1 text-[10px] font-['Press_Start_2P'] text-[#FFC66D]"
+            className="inline-flex items-center gap-1 text-[9px] sm:text-[10px] font-['Press_Start_2P'] text-[#FFC66D]"
             data-testid="mp-memory-round-indicator"
           >
             ROUND {mm.roundNumber ?? 1}
           </span>
           {(isSynchronizing || isConnected === false) && (
             <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FFC66D]/15 border border-[#FFC66D]/40 text-[#FFC66D] text-[10px] font-semibold animate-pulse"
+              className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full bg-[#FFC66D]/15 border border-[#FFC66D]/40 text-[#FFC66D] text-[10px] font-semibold animate-pulse"
               data-testid="mp-memory-sync-indicator"
             >
               {isConnected === false ? 'Reconnecting...' : 'Syncing...'}
@@ -370,11 +401,12 @@ export const MemoryMatchMultiplayerView: React.FC<
               playClick();
               void closeRoom();
             }}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#FF776E]/15 hover:bg-[#FF776E]/25 text-[#FF776E] border border-[#FF776E]/40 text-xs font-semibold cursor-pointer"
+            className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg bg-[#FF776E]/15 hover:bg-[#FF776E]/25 text-[#FF776E] border border-[#FF776E]/40 text-[11px] sm:text-xs font-semibold cursor-pointer shrink-0"
             data-testid="mp-memory-close-room-btn"
           >
-            <XCircle className="w-3.5 h-3.5" />
-            Close Room
+            <XCircle className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+            <span>Close</span>
+            <span className="hidden sm:inline">Room</span>
           </button>
         ) : (
           <button
@@ -383,11 +415,11 @@ export const MemoryMatchMultiplayerView: React.FC<
               playClick();
               void leaveRoom();
             }}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#292342] hover:bg-[#FF776E]/20 text-[#FFF0D7]/80 border border-[#FFF0D7]/20 text-xs font-semibold cursor-pointer"
+            className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg bg-[#292342] hover:bg-[#FF776E]/20 text-[#FFF0D7]/80 border border-[#FFF0D7]/20 text-[11px] sm:text-xs font-semibold cursor-pointer shrink-0"
             data-testid="mp-memory-leave-room-btn"
           >
-            <LogOut className="w-3.5 h-3.5" />
-            Leave
+            <LogOut className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+            <span>Leave</span>
           </button>
         )}
       </div>
@@ -396,24 +428,16 @@ export const MemoryMatchMultiplayerView: React.FC<
       {(actionError || error) && (
         <div
           role="alert"
-          className="max-w-3xl mx-auto mb-4 p-3 rounded-xl bg-[#FF776E]/15 border border-[#FF776E] text-[#FFF0D7] text-xs flex items-center gap-2"
+          className="max-w-4xl mx-auto mb-2 sm:mb-3 p-2.5 sm:p-3 rounded-xl bg-[#FF776E]/15 border border-[#FF776E] text-[#FFF0D7] text-xs flex items-center gap-2"
         >
           <AlertTriangle className="w-4 h-4 text-[#FF776E] shrink-0" />
           <span>{actionError || error}</span>
         </div>
       )}
 
-      {/* Multi-Player Shared Scoreboard (2–8 Players) */}
+      {/* Multi-Player Shared Scoreboard (2–8 Players, max 2 compact rows on mobile) */}
       <div
-        className={`grid gap-2 sm:gap-2.5 max-w-4xl mx-auto mb-3 ${
-          orderedPlayers.length === 2
-            ? 'grid-cols-2'
-            : orderedPlayers.length === 3
-            ? 'grid-cols-3'
-            : orderedPlayers.length === 5 || orderedPlayers.length === 6
-            ? 'grid-cols-2 sm:grid-cols-3'
-            : 'grid-cols-2 sm:grid-cols-4'
-        }`}
+        className={`grid gap-1 sm:gap-2.5 max-w-4xl mx-auto mb-1.5 sm:mb-3 ${scoreboardGridCols}`}
         data-testid="mp-memory-scoreboard"
       >
         {orderedPlayers.map((player, idx) => {
@@ -429,14 +453,17 @@ export const MemoryMatchMultiplayerView: React.FC<
           return (
             <div
               key={player.uid}
-              className="relative overflow-hidden p-2.5 sm:p-3 rounded-xl border-2 transition-all min-w-0 bg-[#201A36]"
+              className={`relative overflow-hidden px-1.5 py-1.5 sm:p-2.5 md:p-3 rounded-lg sm:rounded-xl border sm:border-2 transition-all min-w-0 bg-[#201A36] ${
+                !connected ? 'opacity-65' : ''
+              }`}
               style={{
                 borderColor: isWinner ? '#FFC66D' : accentHex,
+                borderWidth: isTurn || isWinner ? '2px' : undefined,
                 backgroundImage: `linear-gradient(135deg, ${tintRgba} 0%, rgba(32, 26, 54, 0.95) 100%)`,
                 boxShadow: isWinner
-                  ? '0 0 20px rgba(255, 198, 109, 0.3)'
+                  ? '0 0 18px rgba(255, 198, 109, 0.32)'
                   : isTurn
-                  ? `0 0 16px ${glowRgba}`
+                  ? `0 0 14px ${glowRgba}`
                   : 'none',
               }}
               data-testid={`mp-memory-player-${idx}`}
@@ -444,17 +471,16 @@ export const MemoryMatchMultiplayerView: React.FC<
             >
               {/* Top player colour bar */}
               <div
-                className="
-                  absolute top-0 left-0 right-0 h-1
-                "
+                className="absolute top-0 left-0 right-0 h-[3px] sm:h-1"
                 style={{ backgroundColor: accentHex }}
                 aria-hidden="true"
               />
 
-              <div className="flex items-center justify-between gap-1 mb-1 mt-0.5">
-                <div className="flex items-center gap-1.5 min-w-0">
+              {/* Row 1: Player badge, crown, desktop nickname, active TURN / YOU indicators */}
+              <div className="flex items-center justify-between gap-0.5 sm:gap-1 mt-0.5 mb-0.5 sm:mb-1">
+                <div className="flex items-center gap-1 min-w-0">
                   <span
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-['Press_Start_2P'] shrink-0 border"
+                    className="inline-flex items-center gap-0.5 sm:gap-1 px-1 sm:px-1.5 py-0.5 rounded text-[7px] sm:text-[9px] font-['Press_Start_2P'] shrink-0 border leading-none"
                     style={{
                       color: accentHex,
                       borderColor: accentHex,
@@ -463,22 +489,23 @@ export const MemoryMatchMultiplayerView: React.FC<
                     data-testid={`mp-memory-player-badge-${idx}`}
                   >
                     <span
-                      className="w-2 h-2 rounded-full shrink-0"
+                      className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full shrink-0"
                       style={{ backgroundColor: accentHex }}
                     />
                     {playerColor?.label ?? `P${idx + 1}`}
                   </span>
                   {player.isHost && (
-                    <Crown className="w-3 h-3 text-[#FFC66D] shrink-0" />
+                    <Crown className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-[#FFC66D] shrink-0" />
                   )}
-                  <span className="font-bold text-xs sm:text-sm text-[#FFF0D7] truncate">
+                  <span className="hidden sm:inline font-bold text-xs sm:text-sm text-[#FFF0D7] truncate">
                     {player.nickname}
                   </span>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
+
+                <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
                   {isTurn && (
                     <span
-                      className="px-1.5 py-0.5 rounded text-[8px] font-['Press_Start_2P'] uppercase shrink-0"
+                      className="px-1 sm:px-1.5 py-0.5 rounded text-[6px] sm:text-[8px] font-['Press_Start_2P'] uppercase shrink-0 leading-none"
                       style={{
                         color: '#171329',
                         backgroundColor: accentHex,
@@ -488,29 +515,34 @@ export const MemoryMatchMultiplayerView: React.FC<
                     </span>
                   )}
                   {player.uid === uid && (
-                    <span className="px-1.5 py-0.5 rounded bg-[#56E0CB]/20 text-[#56E0CB] text-[9px] font-bold shrink-0">
+                    <span className="hidden sm:inline px-1.5 py-0.5 rounded bg-[#56E0CB]/20 text-[#56E0CB] text-[9px] font-bold shrink-0">
                       YOU
                     </span>
                   )}
                 </div>
               </div>
 
-              <div className="flex items-baseline justify-between mt-1.5">
-                <div className="flex items-baseline gap-1">
+              {/* Row 2: Mobile truncated nickname + score; Desktop score + Online status */}
+              <div className="flex items-baseline justify-between gap-1 mt-0.5 sm:mt-1.5">
+                <span className="sm:hidden text-[10px] font-semibold text-[#FFF0D7]/95 truncate min-w-0">
+                  {player.nickname}
+                </span>
+
+                <div className="flex items-baseline gap-1 shrink-0">
                   <span
-                    className="font-['Press_Start_2P'] text-base sm:text-xl"
+                    className="font-['Press_Start_2P'] text-[11px] sm:text-xl leading-none"
                     style={{ color: accentHex }}
                     data-testid={`mp-memory-score-${idx}`}
                   >
                     {player.score}
                   </span>
-                  <span className="text-[10px] text-[#FFF0D7]/70">
+                  <span className="hidden sm:inline text-[10px] text-[#FFF0D7]/70">
                     {player.score === 1 ? 'PAIR' : 'PAIRS'}
                   </span>
                 </div>
 
                 <span
-                  className={`inline-flex items-center gap-0.5 text-[9px] font-semibold ${
+                  className={`hidden sm:inline-flex items-center gap-0.5 text-[9px] font-semibold ${
                     connected ? 'text-[#56E0CB]' : 'text-[#FF776E]'
                   }`}
                 >
@@ -529,12 +561,13 @@ export const MemoryMatchMultiplayerView: React.FC<
 
       {/* Compact Player Colour Legend */}
       <div
-        className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 max-w-3xl mx-auto mb-3 px-3 py-1.5 rounded-lg bg-[#201A36]/80 border border-[#3D345F]/70 text-[11px]"
+        className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 sm:gap-x-3 sm:gap-y-1.5 max-w-4xl mx-auto mb-1.5 sm:mb-3 px-2 py-1 sm:px-3 sm:py-1.5 rounded-lg bg-[#201A36]/80 border border-[#3D345F]/70 text-[10px] sm:text-[11px]"
         data-testid="mp-memory-color-legend"
         aria-label="Matched card player colour legend"
       >
-        <span className="text-[#FFF0D7]/60 font-semibold uppercase tracking-wider text-[10px]">
-          Matched Card Colours:
+        <span className="text-[#FFF0D7]/60 font-semibold uppercase tracking-wider text-[9px] sm:text-[10px]">
+          <span className="sm:hidden">Colours:</span>
+          <span className="hidden sm:inline">Matched Card Colours:</span>
         </span>
         {orderedPlayers.map((player, idx) => {
           const playerColor = getMemoryPlayerColor(player.uid, mm.turnOrderUids);
@@ -543,11 +576,11 @@ export const MemoryMatchMultiplayerView: React.FC<
           return (
             <span
               key={player.uid}
-              className="inline-flex items-center gap-1.5 text-[#FFF0D7]/90 font-medium"
+              className="inline-flex items-center gap-1 sm:gap-1.5 text-[#FFF0D7]/90 font-medium"
               data-testid={`mp-memory-legend-item-${idx}`}
             >
               <span
-                className="w-3 h-3 rounded-sm border-2 inline-block shrink-0"
+                className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-sm border-2 inline-block shrink-0"
                 style={{
                   borderColor: hex,
                   backgroundColor: tint,
@@ -558,7 +591,7 @@ export const MemoryMatchMultiplayerView: React.FC<
               <span className="font-bold" style={{ color: hex }}>
                 {playerColor?.label ?? `P${idx + 1}`}
               </span>
-              <span className="truncate max-w-[95px]">{player.nickname}</span>
+              <span className="hidden sm:inline truncate max-w-[95px]">{player.nickname}</span>
             </span>
           );
         })}
@@ -567,21 +600,21 @@ export const MemoryMatchMultiplayerView: React.FC<
       {/* New Round Transition Banner */}
       {roundTransitionText && (
         <div
-          className="max-w-xl mx-auto mb-3 py-2.5 px-4 rounded-xl bg-[#FFC66D]/20 border-2 border-[#FFC66D] text-[#FFC66D] text-center shadow-[0_0_20px_rgba(255,198,109,0.28)] animate-pulse"
+          className="max-w-xl mx-auto mb-2 sm:mb-3 py-2 sm:py-2.5 px-3 sm:px-4 rounded-xl bg-[#FFC66D]/20 border-2 border-[#FFC66D] text-[#FFC66D] text-center shadow-[0_0_20px_rgba(255,198,109,0.28)] animate-pulse"
           role="status"
           data-testid="mp-memory-round-transition"
         >
-          <span className="font-['Press_Start_2P'] text-[10px] sm:text-xs uppercase tracking-wider">
+          <span className="font-['Press_Start_2P'] text-[9px] sm:text-xs uppercase tracking-wider">
             {roundTransitionText}
           </span>
         </div>
       )}
 
-      {/* Turn & Match Status Banner */}
-      <div className="max-w-xl mx-auto mb-4 text-center">
+      {/* Compact Sticky Turn & Match Status Banner on mobile, static on desktop */}
+      <div className="sticky top-[52px] sm:static z-30 max-w-4xl mx-auto mb-2 sm:mb-4 bg-[#171329]/95 sm:bg-transparent backdrop-blur-sm sm:backdrop-blur-none py-1 sm:py-0 rounded-xl">
         {isGameOver ? (
           <div
-            className={`py-2.5 sm:py-3 px-4 rounded-xl border-2 flex items-center justify-center gap-2 ${
+            className={`max-w-xl mx-auto py-2 sm:py-3 px-3 sm:px-4 rounded-xl border-2 flex items-center justify-center gap-2 ${
               mm.isTie
                 ? 'bg-[#FFC66D]/15 border-[#FFC66D] text-[#FFC66D]'
                 : 'bg-[#56E0CB]/15 border-[#56E0CB] text-[#56E0CB]'
@@ -590,7 +623,7 @@ export const MemoryMatchMultiplayerView: React.FC<
             data-testid="mp-memory-result-banner"
           >
             <Trophy className="w-4 h-4 shrink-0" />
-            <span className="font-['Press_Start_2P'] text-[10px] sm:text-xs leading-snug">
+            <span className="font-['Press_Start_2P'] text-[9px] sm:text-xs leading-snug text-center">
               {mm.isTie
                 ? `TIE GAME! ${winnerNicknames.toUpperCase()} TIED!`
                 : `${winnerNicknames.toUpperCase()} WINS THE MATCH!`}
@@ -599,7 +632,7 @@ export const MemoryMatchMultiplayerView: React.FC<
           </div>
         ) : (
           <div
-            className={`py-2.5 px-4 rounded-xl border text-center transition-colors ${
+            className={`max-w-xl mx-auto py-1.5 sm:py-2.5 px-3 sm:px-4 rounded-xl border flex items-center justify-between sm:justify-center gap-2 transition-colors ${
               isMyTurn
                 ? 'bg-[#292342] border-[#56E0CB] text-[#56E0CB]'
                 : 'bg-[#201A36] border-[#FFC66D]/50 text-[#FFC66D]'
@@ -607,25 +640,64 @@ export const MemoryMatchMultiplayerView: React.FC<
             role="status"
             data-testid="mp-memory-turn-banner"
           >
-            <span className="text-xs font-semibold mr-2 text-[#FFF0D7]/75">
-              {mm.pendingResetAt !== null ? 'Revealing Pair:' : 'Current Turn:'}
-            </span>
-            <span className="font-['Press_Start_2P'] text-[10px] sm:text-xs uppercase">
-              {mm.pendingResetAt !== null
-                ? 'No Match! Turning Face Down...'
-                : isMyTurn
-                ? `YOUR TURN (Pick ${2 - mm.flippedCardIds.length} Card${
-                    2 - mm.flippedCardIds.length === 1 ? '' : 's'
-                  })`
-                : `${activeTurnPlayer?.nickname || 'Player'}'s Turn`}
+            <div className="min-w-0 truncate">
+              <span className="hidden sm:inline text-xs font-semibold mr-2 text-[#FFF0D7]/75">
+                {mm.pendingResetAt !== null ? 'Revealing Pair:' : 'Current Turn:'}
+              </span>
+              <span className="font-['Press_Start_2P'] text-[9px] sm:text-xs uppercase">
+                {mm.pendingResetAt !== null
+                  ? 'No Match! Flipping Back...'
+                  : isMyTurn
+                  ? `YOUR TURN (Pick ${2 - mm.flippedCardIds.length})`
+                  : `${activeTurnPlayer?.nickname || 'Player'}'s Turn`}
+              </span>
+            </div>
+
+            <span className="sm:hidden shrink-0 px-1.5 py-0.5 rounded bg-[#171329]/80 border border-current/30 text-[9px] font-bold">
+              {mm.matchedPairs}/{mm.totalPairs}
             </span>
           </div>
         )}
       </div>
 
+      {/* Play Again / Next Round Panel (rendered above board when finished so mobile users don't scroll past 100 cards) */}
+      {isGameOver && (
+        <div
+          className="max-w-3xl mx-auto mb-2.5 sm:mb-4 p-3 sm:p-4 rounded-xl bg-[#201A36] border-2 border-[#FFC66D]/60"
+          data-testid="mp-memory-rematch-panel"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-3">
+            <div className="min-w-0">
+              <h3 className="font-['Press_Start_2P'] text-[10px] sm:text-xs text-[#FFC66D] mb-1">
+                ROUND {mm.roundNumber ?? 1} COMPLETE
+              </h3>
+              <p className="text-xs text-[#FFF0D7]/75" data-testid="mp-memory-rematch-status">
+                {isHost
+                  ? `Click Play Again to immediately deal a fresh shuffled board for Round ${(mm.roundNumber ?? 1) + 1}!`
+                  : `Waiting for the host to start Round ${(mm.roundNumber ?? 1) + 1}...`}
+              </p>
+            </div>
+
+            {isHost && (
+              <div className="flex flex-col sm:items-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void handleStartNextRound()}
+                  disabled={isSubmittingRematch}
+                  className="w-full sm:w-auto px-4 sm:px-5 py-2.5 sm:py-3 rounded-xl font-['Press_Start_2P'] text-[10px] sm:text-xs uppercase tracking-wider bg-[#FF776E] hover:bg-[#ff8d85] text-[#171329] shadow-[0_0_20px_rgba(255,119,110,0.4)] transition-all cursor-pointer disabled:opacity-60"
+                  data-testid="mp-memory-play-again-btn"
+                >
+                  Play Again
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Shared Memory Match Card Grid */}
       <div
-        className={`grid ${gridClasses} mx-auto bg-[#201A36] border-4 border-[#292342] rounded-2xl p-2.5 sm:p-4 shadow-2xl`}
+        className={`grid ${gridClasses} mx-auto bg-[#201A36] border-2 sm:border-4 border-[#292342] rounded-xl sm:rounded-2xl p-1.5 sm:p-3 md:p-4 shadow-2xl`}
         role="grid"
         aria-label={`Multiplayer Memory Match Board with ${totalCards} cards`}
       >
@@ -659,7 +731,7 @@ export const MemoryMatchMultiplayerView: React.FC<
                   borderColor: matchedOwnerColor.hex,
                   backgroundColor: '#171329',
                   backgroundImage: `linear-gradient(135deg, ${matchedOwnerColor.tintRgba} 0%, rgba(23, 19, 41, 0.92) 100%)`,
-                  boxShadow: `0 0 12px ${matchedOwnerColor.glowRgba}, inset 0 0 8px ${matchedOwnerColor.tintRgba}`,
+                  boxShadow: `0 0 10px ${matchedOwnerColor.glowRgba}, inset 0 0 6px ${matchedOwnerColor.tintRgba}`,
                 }
               : undefined;
 
@@ -688,7 +760,7 @@ export const MemoryMatchMultiplayerView: React.FC<
                 card.isMatched && matchedOwnerColor ? matchedOwnerColor.hex : undefined
               }
               style={matchedCardStyle}
-              className={`relative aspect-square rounded-lg sm:rounded-xl flex flex-col items-center justify-center transition-all select-none ${
+              className={`relative ${cardAspectClass} w-full flex flex-col items-center justify-center transition-all select-none touch-manipulation ${
                 card.isMatched
                   ? 'bg-[#171329]/90 border-2'
                   : card.isFlipped
@@ -707,7 +779,7 @@ export const MemoryMatchMultiplayerView: React.FC<
                   />
                   {card.isMatched && matchedOwnerColor && (
                     <span
-                      className="absolute bottom-0.5 left-1 font-['Press_Start_2P'] text-[6px] sm:text-[7px] px-1 py-0.2 rounded leading-tight"
+                      className="absolute bottom-0.5 left-0.5 sm:bottom-0.5 sm:left-1 font-['Press_Start_2P'] text-[5px] sm:text-[7px] px-0.5 sm:px-1 py-0.5 rounded leading-none pointer-events-none"
                       style={{
                         color: matchedOwnerColor.hex,
                         backgroundColor: 'rgba(23, 19, 41, 0.88)',
@@ -727,41 +799,6 @@ export const MemoryMatchMultiplayerView: React.FC<
           );
         })}
       </div>
-
-      {/* Play Again / Next Round Panel */}
-      {isGameOver && (
-        <div
-          className="max-w-3xl mx-auto mt-4 p-3.5 sm:p-4 rounded-xl bg-[#201A36] border-2 border-[#FFC66D]/60"
-          data-testid="mp-memory-rematch-panel"
-        >
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="min-w-0">
-              <h3 className="font-['Press_Start_2P'] text-[10px] sm:text-xs text-[#FFC66D] mb-1.5">
-                ROUND {mm.roundNumber ?? 1} COMPLETE
-              </h3>
-              <p className="text-xs text-[#FFF0D7]/75" data-testid="mp-memory-rematch-status">
-                {isHost
-                  ? `Click Play Again to immediately deal a fresh shuffled board for Round ${(mm.roundNumber ?? 1) + 1}!`
-                  : `Waiting for the host to start Round ${(mm.roundNumber ?? 1) + 1}...`}
-              </p>
-            </div>
-
-            {isHost && (
-              <div className="flex flex-col sm:items-end gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => void handleStartNextRound()}
-                  disabled={isSubmittingRematch}
-                  className="px-5 py-3 rounded-xl font-['Press_Start_2P'] text-xs uppercase tracking-wider bg-[#FF776E] hover:bg-[#ff8d85] text-[#171329] shadow-[0_0_20px_rgba(255,119,110,0.4)] transition-all cursor-pointer disabled:opacity-60"
-                  data-testid="mp-memory-play-again-btn"
-                >
-                  Play Again
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Victory Celebration Modal */}
       <VictoryCelebrationModal
