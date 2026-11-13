@@ -10,10 +10,11 @@ import {
   MemoryMatchMultiplayerState,
   MemoryMultiplayerPlayerCount,
   MEMORY_MULTIPLAYER_CONFIGS,
+  getMinimumPlayersToStart,
   computeRoomExpiresAt,
   isRoomExpired,
 } from '../types/multiplayer';
-import { MEMORY_CARD_SYMBOLS } from './memoryMatch';
+import { MEMORY_CARD_SYMBOLS, type CardSymbolDefinition } from './memoryMatch';
 import {
   ROOMS_COLLECTION,
   MultiplayerRoomError,
@@ -28,24 +29,36 @@ export const MISMATCH_REVEAL_DELAY_MS = 1100;
 
 /**
  * Canonical player colour theme for Multiplayer Memory Match.
- * Derived deterministically from the player's slot index (0..3) in the room.
+ * Derived deterministically from the player's slot index (0..7) in the room.
  */
 export interface MemoryPlayerColorTheme {
-  playerNumber: 1 | 2 | 3 | 4;
-  label: 'P1' | 'P2' | 'P3' | 'P4';
-  name: 'Blue' | 'Red' | 'Green' | 'Purple';
-  hex: '#3B82F6' | '#EF4444' | '#22C55E' | '#A855F7';
+  playerNumber: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  label: 'P1' | 'P2' | 'P3' | 'P4' | 'P5' | 'P6' | 'P7' | 'P8';
+  name: 'Blue' | 'Red' | 'Green' | 'Purple' | 'Orange' | 'Pink' | 'Yellow' | 'Cyan';
+  hex:
+    | '#3B82F6'
+    | '#EF4444'
+    | '#22C55E'
+    | '#A855F7'
+    | '#F97316'
+    | '#EC4899'
+    | '#EAB308'
+    | '#06B6D4';
   glowRgba: string;
   tintRgba: string;
   badgeBgRgba: string;
 }
 
 /**
- * Fixed player colour assignments:
+ * Fixed player colour assignments for up to 8 players:
  * - Player 1 (Host): Blue #3B82F6
  * - Player 2: Red #EF4444
  * - Player 3: Green #22C55E
  * - Player 4: Purple #A855F7
+ * - Player 5: Orange #F97316
+ * - Player 6: Pink #EC4899
+ * - Player 7: Yellow #EAB308
+ * - Player 8: Cyan #06B6D4
  */
 export const MEMORY_PLAYER_COLOR_PALETTE: ReadonlyArray<MemoryPlayerColorTheme> = [
   {
@@ -84,6 +97,42 @@ export const MEMORY_PLAYER_COLOR_PALETTE: ReadonlyArray<MemoryPlayerColorTheme> 
     tintRgba: 'rgba(168, 85, 247, 0.16)',
     badgeBgRgba: 'rgba(168, 85, 247, 0.22)',
   },
+  {
+    playerNumber: 5,
+    label: 'P5',
+    name: 'Orange',
+    hex: '#F97316',
+    glowRgba: 'rgba(249, 115, 22, 0.38)',
+    tintRgba: 'rgba(249, 115, 22, 0.16)',
+    badgeBgRgba: 'rgba(249, 115, 22, 0.22)',
+  },
+  {
+    playerNumber: 6,
+    label: 'P6',
+    name: 'Pink',
+    hex: '#EC4899',
+    glowRgba: 'rgba(236, 72, 153, 0.38)',
+    tintRgba: 'rgba(236, 72, 153, 0.16)',
+    badgeBgRgba: 'rgba(236, 72, 153, 0.22)',
+  },
+  {
+    playerNumber: 7,
+    label: 'P7',
+    name: 'Yellow',
+    hex: '#EAB308',
+    glowRgba: 'rgba(234, 179, 8, 0.38)',
+    tintRgba: 'rgba(234, 179, 8, 0.16)',
+    badgeBgRgba: 'rgba(234, 179, 8, 0.22)',
+  },
+  {
+    playerNumber: 8,
+    label: 'P8',
+    name: 'Cyan',
+    hex: '#06B6D4',
+    glowRgba: 'rgba(6, 182, 212, 0.38)',
+    tintRgba: 'rgba(6, 182, 212, 0.16)',
+    badgeBgRgba: 'rgba(6, 182, 212, 0.22)',
+  },
 ] as const;
 
 /**
@@ -109,14 +158,19 @@ export function getMemoryPlayerColor(
  * Unmatched cards and cards temporarily revealed during a turn/mismatch always return `null`.
  */
 export function getMatchedCardOwnerColor(
-  card: Pick<MultiplayerMemoryCard, 'isMatched' | 'matchedByUid'> & { pairKey?: string },
+  card: Pick<MultiplayerMemoryCard, 'isMatched' | 'matchedByUid'> & {
+    pairKey?: string;
+    symbolId?: string;
+  },
   orderedPlayerUids: ReadonlyArray<string>,
   matchedByPairKey?: Readonly<Record<string, string>>
 ): MemoryPlayerColorTheme | null {
   if (!card.isMatched) {
     return null;
   }
+  const lookupKey = card.symbolId ?? card.pairKey;
   const ownerUid =
+    (lookupKey && matchedByPairKey ? matchedByPairKey[lookupKey] : undefined) ??
     (card.pairKey && matchedByPairKey ? matchedByPairKey[card.pairKey] : undefined) ??
     card.matchedByUid;
   if (!ownerUid) {
@@ -125,54 +179,68 @@ export function getMatchedCardOwnerColor(
   return getMemoryPlayerColor(ownerUid, orderedPlayerUids);
 }
 
-const SERIES_VARIANTS: ReadonlyArray<{
-  seriesIndex: number;
-  badgeLabel?: string;
-  colorOverride?: Record<string, string>;
-}> = [
-  {
-    seriesIndex: 1,
-    badgeLabel: undefined,
-  },
-  {
-    seriesIndex: 2,
-    badgeLabel: 'II',
-    colorOverride: {
-      heart: '#FF9E80',
-      gem: '#64FFDA',
-      star: '#FFE57F',
-      potion: '#EA80FC',
-      gamepad: '#80D8FF',
-      ghost: '#FF80AB',
-      key: '#CCFF90',
-      bolt: '#84FFFF',
-      crown: '#FFD180',
-      shield: '#B9F6CA',
-    },
-  },
-  {
-    seriesIndex: 3,
-    badgeLabel: 'III',
-    colorOverride: {
-      heart: '#FF5252',
-      gem: '#1DE9B6',
-      star: '#FFD740',
-      potion: '#D500F9',
-      gamepad: '#00E5FF',
-      ghost: '#FF4081',
-      key: '#AEEA00',
-      bolt: '#00B0FF',
-      crown: '#FFAB40',
-      shield: '#69F0AE',
-    },
-  },
-];
+/**
+ * Library of 50 genuinely distinct retro pixel-art card symbols for Multiplayer Memory Match.
+ * Every symbol has a unique `symbolId`, recognizable arcade object, and distinct pixel SVG design
+ * in `MemorySymbolIcon.tsx`—never relying on Roman numerals, letters, or numbers.
+ */
+export const MULTIPLAYER_MEMORY_SYMBOLS: ReadonlyArray<CardSymbolDefinition> = [
+  ...MEMORY_CARD_SYMBOLS,
+  { symbolId: 'alien', name: 'Space Invader', color: '#69F0AE' },
+  { symbolId: 'monster', name: 'Horned Monster', color: '#FF5252' },
+  { symbolId: 'slime', name: 'Dungeon Slime', color: '#00E676' },
+  { symbolId: 'robot', name: 'Cyber Robot', color: '#90A4AE' },
+  { symbolId: 'rocket', name: 'Retro Rocket', color: '#FF7043' },
+  { symbolId: 'ufo', name: 'Flying Saucer', color: '#18FFFF' },
+  { symbolId: 'chest', name: 'Treasure Chest', color: '#FFB74D' },
+  { symbolId: 'coin', name: 'Arcade Token', color: '#FFD54F' },
+  { symbolId: 'crystal', name: 'Prism Crystal', color: '#E040FB' },
+  { symbolId: 'joystick', name: 'Arcade Joystick', color: '#FF8A65' },
+  { symbolId: 'arcade', name: 'Arcade Cabinet', color: '#7C4DFF' },
+  { symbolId: 'cherry', name: 'Pixel Cherries', color: '#FF1744' },
+  { symbolId: 'mushroom', name: 'Power Mushroom', color: '#FF5252' },
+  { symbolId: 'pizza', name: 'Arcade Pizza', color: '#FFCA28' },
+  { symbolId: 'sword', name: 'Hero Sword', color: '#80DEEA' },
+  { symbolId: 'bomb', name: 'Pixel Bomb', color: '#B0BEC5' },
+  { symbolId: 'skull', name: 'Dungeon Skull', color: '#FFF0D7' },
+  { symbolId: 'dragon', name: 'Fire Dragon', color: '#FF6E40' },
+  { symbolId: 'cat', name: 'Lucky Pixel Cat', color: '#FFAB91' },
+  { symbolId: 'owl', name: 'Night Owl', color: '#BCAAA4' },
+  { symbolId: 'crab', name: 'Reef Crab', color: '#FF6E40' },
+  { symbolId: 'fish', name: 'Neon Fish', color: '#26C6DA' },
+  { symbolId: 'moon', name: 'Crescent Moon', color: '#FFF59D' },
+  { symbolId: 'sun', name: 'Solar Burst', color: '#FFAB00' },
+  { symbolId: 'planet', name: 'Ringed Planet', color: '#CE93D8' },
+  { symbolId: 'comet', name: 'Blazing Comet', color: '#40C4FF' },
+  { symbolId: 'wand', name: 'Star Wand', color: '#F48FB1' },
+  { symbolId: 'scroll', name: 'Spell Scroll', color: '#FFE082' },
+  { symbolId: 'hourglass', name: 'Time Hourglass', color: '#80CBC4' },
+  { symbolId: 'cauldron', name: 'Witch Cauldron', color: '#9575CD' },
+  { symbolId: 'trophy', name: 'High-Score Trophy', color: '#FFD740' },
+  { symbolId: 'cartridge', name: 'Game Cartridge', color: '#7986CB' },
+  { symbolId: 'cassette', name: 'Synth Cassette', color: '#F06292' },
+  { symbolId: 'apple', name: 'Golden Apple', color: '#FF5252' },
+  { symbolId: 'burger', name: 'Diner Burger', color: '#FFA726' },
+  { symbolId: 'icecream', name: 'Pixel Cone', color: '#F8BBD0' },
+  { symbolId: 'axe', name: 'Battle Axe', color: '#90CAF9' },
+  { symbolId: 'bow', name: 'Ranger Bow', color: '#A5D6A7' },
+  { symbolId: 'helmet', name: 'Paladin Helmet', color: '#CFD8DC' },
+  { symbolId: 'anchor', name: 'Pirate Anchor', color: '#4FC3F7' },
+] as const;
+
+export const MEMORY_SYMBOL_ICON_IDS: ReadonlyArray<string> = MULTIPLAYER_MEMORY_SYMBOLS.map(
+  (s) => s.symbolId
+);
 
 /**
- * Generates and shuffles the shared multiplayer Memory Match board for 2, 3, or 4 players:
- * - 2 players -> 20 cards (10 pairs)
- * - 3 players -> 40 cards (20 pairs)
- * - 4 players -> 60 cards (30 pairs)
+ * Generates and shuffles the shared multiplayer Memory Match board for 2 to 8 players:
+ * - 2 players -> 20 cards (10 unique pairs)
+ * - 3 players -> 40 cards (20 unique pairs)
+ * - 4 players -> 60 cards (30 unique pairs)
+ * - 5 players -> 100 cards (50 unique pairs)
+ * - 6 players -> 100 cards (50 unique pairs)
+ * - 7 players -> 100 cards (50 unique pairs)
+ * - 8 players -> 100 cards (50 unique pairs)
  */
 export function createMultiplayerMemoryDeck(
   playerCount: MemoryMultiplayerPlayerCount,
@@ -182,47 +250,23 @@ export function createMultiplayerMemoryDeck(
   if (!config) {
     throw new MultiplayerRoomError(
       'INVALID_STATE_TRANSITION',
-      'Memory Match requires 2, 3, or 4 players.'
+      'Memory Match requires 2 to 8 players.'
     );
   }
 
-  const pairTemplates: Array<{
-    pairKey: string;
-    symbolId: string;
-    name: string;
-    color: string;
-    badgeLabel?: string;
-  }> = [];
-
-  for (const variant of SERIES_VARIANTS) {
-    for (const sym of MEMORY_CARD_SYMBOLS) {
-      if (pairTemplates.length >= config.matchingPairs) {
-        break;
-      }
-      const useSeriesBadge = config.matchingPairs > 10 ? (variant.badgeLabel ?? 'I') : undefined;
-      const color = variant.colorOverride?.[sym.symbolId] ?? sym.color;
-      pairTemplates.push({
-        pairKey: `${sym.symbolId}-${variant.seriesIndex}`,
-        symbolId: sym.symbolId,
-        name: useSeriesBadge ? `${sym.name} ${useSeriesBadge}` : sym.name,
-        color,
-        badgeLabel: useSeriesBadge,
-      });
-    }
-  }
+  const selectedSymbols = MULTIPLAYER_MEMORY_SYMBOLS.slice(0, config.matchingPairs);
 
   const unshuffled: MultiplayerMemoryCard[] = [];
   let nextId = 0;
 
-  for (const tpl of pairTemplates) {
+  for (const sym of selectedSymbols) {
     for (let copy = 0; copy < 2; copy++) {
       unshuffled.push({
         id: nextId++,
-        pairKey: tpl.pairKey,
-        symbolId: tpl.symbolId,
-        name: tpl.name,
-        color: tpl.color,
-        ...(tpl.badgeLabel ? { badgeLabel: tpl.badgeLabel } : {}),
+        pairKey: sym.symbolId,
+        symbolId: sym.symbolId,
+        name: sym.name,
+        color: sym.color,
         isFlipped: false,
         isMatched: false,
         matchedByUid: null,
@@ -290,18 +334,17 @@ export function applyStartMemoryMatchGame(params: {
     );
   }
 
-  validateHostCanStartGame(room, callerUid, nowMs);
-
-  const playerCount = room.maxPlayers as MemoryMultiplayerPlayerCount;
-  const config = MEMORY_MULTIPLAYER_CONFIGS[playerCount];
-  if (!config) {
+  const maxCapacity = room.maxPlayers as MemoryMultiplayerPlayerCount;
+  if (!MEMORY_MULTIPLAYER_CONFIGS[maxCapacity]) {
     throw new MultiplayerRoomError(
       'INVALID_STATE_TRANSITION',
-      'Invalid player count for Memory Match.'
+      'Invalid player capacity for Memory Match.'
     );
   }
 
-  // Ensure all required players are connected
+  validateHostCanStartGame(room, callerUid, nowMs);
+
+  // Ensure all joined players are connected
   for (const playerUid of room.playerOrder) {
     const p = room.players[playerUid];
     if (!p || !isPlayerEffectivelyConnected(p, nowMs)) {
@@ -312,8 +355,18 @@ export function applyStartMemoryMatchGame(params: {
     }
   }
 
-  const cards = createMultiplayerMemoryDeck(playerCount, randomFn);
+  // Use the actual participating player count (not necessarily the maximum room capacity)
   const turnOrderUids = [...room.playerOrder];
+  const participatingPlayerCount = turnOrderUids.length as MemoryMultiplayerPlayerCount;
+  const config = MEMORY_MULTIPLAYER_CONFIGS[participatingPlayerCount];
+  if (!config) {
+    throw new MultiplayerRoomError(
+      'INVALID_STATE_TRANSITION',
+      'Invalid participating player count for Memory Match.'
+    );
+  }
+
+  const cards = createMultiplayerMemoryDeck(participatingPlayerCount, randomFn);
   const firstTurnUid = turnOrderUids[0];
 
   const resetPlayers: Record<string, RoomPlayer> = {};
@@ -329,6 +382,7 @@ export function applyStartMemoryMatchGame(params: {
     cards,
     totalPairs: config.matchingPairs,
     matchedPairs: 0,
+    roundNumber: 1,
     matchedByPairKey: {},
     lastMatchedPairKey: null,
     turnOrderUids,
@@ -356,12 +410,15 @@ export function applyStartMemoryMatchGame(params: {
 /**
  * Resolves a pending mismatched pair by turning the two revealed cards face down
  * and passing the turn to the next player.
+ * If `expectedRoundNumber` is provided and does not match the room's current round,
+ * returns the room unchanged so stale timers from a previous round never affect a new round.
  */
 export function applyResolveMemoryMatchMismatch(params: {
   room: MultiplayerRoomDocument;
+  expectedRoundNumber?: number;
   nowMs?: number;
 }): MultiplayerRoomDocument {
-  const { room } = params;
+  const { room, expectedRoundNumber } = params;
   const nowMs = params.nowMs ?? Date.now();
 
   if (room.status !== 'in_progress' || !room.memoryMatchState) {
@@ -369,6 +426,11 @@ export function applyResolveMemoryMatchMismatch(params: {
   }
 
   const mm = room.memoryMatchState;
+  const currentRound = mm.roundNumber ?? 1;
+  if (expectedRoundNumber !== undefined && currentRound !== expectedRoundNumber) {
+    return room;
+  }
+
   if (mm.flippedCardIds.length < 2 || mm.pendingResetAt === null) {
     return room;
   }
@@ -407,6 +469,17 @@ export function applyResolveMemoryMatchMismatch(params: {
 
 /**
  * Pure validator & reducer for a player flipping a card in Multiplayer Memory Match.
+ *
+ * Security & Architectural Note (Client-Side Match Evaluation):
+ * Match evaluation (`firstCard.pairKey === targetCard.pairKey`) runs inside an atomic client-side
+ * Firestore transaction and is bounded by `firestore.rules` (`isValidMemoryMatchTurnMove` /
+ * `isValidMemoryMatchPairOwnershipDiff`), which enforce turn ownership, cap `matchedPairs` and
+ * caller `score` increments to at most `+1` per turn, and guarantee immutability of existing
+ * `matchedByPairKey` ownership entries. Because Firestore Security Rules cannot iterate over the
+ * 20–100 card array to independently compare hidden `pairKey` values, a modified client acting on
+ * its own turn could theoretically submit a synthetic match (`pairDelta == 1`). Eliminating this
+ * client-trust surface in a future competitive mode would require server-side match resolution
+ * (e.g. Cloud Functions for Firebase reading card symbols from a restricted server-only document).
  */
 export function applySelectMemoryMatchCard(params: {
   room: MultiplayerRoomDocument;
@@ -474,9 +547,11 @@ export function applySelectMemoryMatchCard(params: {
   if (!targetCard) {
     throw new MultiplayerRoomError('INVALID_MOVE', 'Invalid card selection.');
   }
+  const targetPairKey = targetCard.symbolId || targetCard.pairKey;
   if (
     targetCard.isMatched ||
     targetCard.matchedByUid !== null ||
+    Boolean(existingMatchedByPairKey[targetPairKey]) ||
     Boolean(existingMatchedByPairKey[targetCard.pairKey])
   ) {
     throw new MultiplayerRoomError('INVALID_MOVE', 'That card has already been matched.');
@@ -522,19 +597,22 @@ export function applySelectMemoryMatchCard(params: {
   // Second card of the turn
   const firstCardId = mm.flippedCardIds[0];
   const firstCard = mm.cards.find((c) => c.id === firstCardId);
+  const firstPairKey = firstCard ? (firstCard.symbolId || firstCard.pairKey) : '';
   if (
     !firstCard ||
     firstCard.isMatched ||
     firstCard.matchedByUid !== null ||
+    Boolean(existingMatchedByPairKey[firstPairKey]) ||
     Boolean(existingMatchedByPairKey[firstCard.pairKey])
   ) {
     throw new MultiplayerRoomError('INVALID_MOVE', 'First selected card was not found.');
   }
 
   const isMatch =
-    firstCard.pairKey === targetCard.pairKey && firstCard.id !== targetCard.id;
+    firstCard.symbolId === targetCard.symbolId && firstCard.id !== targetCard.id;
 
   if (isMatch) {
+    const matchedKey = firstCard.symbolId || firstCard.pairKey;
     const nextCards = mm.cards.map((c) =>
       (c.id === firstCardId || c.id === cardId) && !c.isMatched
         ? {
@@ -548,7 +626,7 @@ export function applySelectMemoryMatchCard(params: {
     const nextMatchedPairs = mm.matchedPairs + 1;
     const nextMatchedByPairKey: Record<string, string> = {
       ...existingMatchedByPairKey,
-      [firstCard.pairKey]: existingMatchedByPairKey[firstCard.pairKey] ?? callerUid,
+      [matchedKey]: existingMatchedByPairKey[matchedKey] ?? callerUid,
     };
     const updatedPlayers: Record<string, RoomPlayer> = {
       ...workingRoom.players,
@@ -590,7 +668,7 @@ export function applySelectMemoryMatchCard(params: {
             cards: nextCards,
             matchedPairs: nextMatchedPairs,
             matchedByPairKey: nextMatchedByPairKey,
-            lastMatchedPairKey: firstCard.pairKey,
+            lastMatchedPairKey: matchedKey,
             flippedCardIds: [],
             pendingResetAt: null,
             winnerUids,
@@ -614,7 +692,7 @@ export function applySelectMemoryMatchCard(params: {
           cards: nextCards,
           matchedPairs: nextMatchedPairs,
           matchedByPairKey: nextMatchedByPairKey,
-          lastMatchedPairKey: firstCard.pairKey,
+          lastMatchedPairKey: matchedKey,
           flippedCardIds: [],
           pendingResetAt: null,
         },
@@ -653,6 +731,142 @@ export function applySelectMemoryMatchCard(params: {
       },
     },
   };
+}
+
+/**
+ * Host-only transition that immediately starts a brand new Memory Match round in the same room
+ * without requiring other players to confirm readiness.
+ * Re-uses the room code, host, membership and player order, builds a fresh shuffled board,
+ * resets scores, ownership, turn, mismatch timers, and results, and increments the round.
+ */
+export function applyStartMemoryMatchRematch(params: {
+  room: MultiplayerRoomDocument;
+  callerUid: string;
+  nowMs?: number;
+  randomFn?: () => number;
+}): MultiplayerRoomDocument {
+  const { room, callerUid, randomFn = Math.random } = params;
+  const nowMs = params.nowMs ?? Date.now();
+
+  if (room.gameType !== 'memory-match') {
+    throw new MultiplayerRoomError('INVALID_STATE_TRANSITION', 'Room is not configured for Memory Match.');
+  }
+  if (room.status === 'closed') {
+    throw new MultiplayerRoomError('ROOM_CLOSED', 'This room is closed.');
+  }
+  if (isRoomExpired(room, nowMs)) {
+    throw new MultiplayerRoomError('ROOM_EXPIRED', 'This room has expired.');
+  }
+  if (room.hostUid !== callerUid) {
+    throw new MultiplayerRoomError('NOT_HOST', 'Only the room host can start the next round.');
+  }
+  if (room.status !== 'completed' || !room.memoryMatchState) {
+    // Also guards against two concurrent starts: the second sees an in-progress room.
+    throw new MultiplayerRoomError(
+      'INVALID_STATE_TRANSITION',
+      'The next round can only be started from a completed game.'
+    );
+  }
+
+  const maxCapacity = room.maxPlayers as MemoryMultiplayerPlayerCount;
+  if (!MEMORY_MULTIPLAYER_CONFIGS[maxCapacity]) {
+    throw new MultiplayerRoomError('INVALID_STATE_TRANSITION', 'Invalid player capacity for Memory Match.');
+  }
+
+  const minPlayers = getMinimumPlayersToStart(room.maxPlayers, room.gameType);
+  const turnOrderUids = [...room.playerOrder];
+  if (turnOrderUids.length < minPlayers) {
+    throw new MultiplayerRoomError(
+      'NOT_ENOUGH_PLAYERS',
+      `At least ${minPlayers} players are required to start the next round.`
+    );
+  }
+
+  const participatingPlayerCount = turnOrderUids.length as MemoryMultiplayerPlayerCount;
+  const config = MEMORY_MULTIPLAYER_CONFIGS[participatingPlayerCount];
+  if (!config) {
+    throw new MultiplayerRoomError('INVALID_STATE_TRANSITION', 'Invalid player count for Memory Match.');
+  }
+
+  const firstTurnUid = turnOrderUids[0];
+
+  const resetPlayers: Record<string, RoomPlayer> = {};
+  for (const [uidKey, player] of Object.entries(room.players)) {
+    resetPlayers[uidKey] = {
+      ...player,
+      score: 0,
+      rematchAccepted: false,
+      ...(uidKey === callerUid ? { lastSeenAt: nowMs, connectionStatus: 'connected' as const } : {}),
+    };
+  }
+
+  const memoryMatchState: MemoryMatchMultiplayerState = {
+    cards: createMultiplayerMemoryDeck(participatingPlayerCount, randomFn),
+    totalPairs: config.matchingPairs,
+    matchedPairs: 0,
+    roundNumber: (room.memoryMatchState.roundNumber ?? 1) + 1,
+    matchedByPairKey: {},
+    lastMatchedPairKey: null,
+    turnOrderUids,
+    currentTurnIndex: 0,
+    currentTurnUid: firstTurnUid,
+    flippedCardIds: [],
+    pendingResetAt: null,
+    winnerUids: [],
+    isTie: false,
+  };
+
+  return {
+    ...room,
+    status: 'in_progress',
+    players: resetPlayers,
+    currentTurnUid: firstTurnUid,
+    startedAt: nowMs,
+    completedAt: null,
+    lastActivityAt: nowMs,
+    expiresAt: computeRoomExpiresAt('in_progress', nowMs),
+    memoryMatchState,
+  };
+}
+
+/**
+ * Firestore transaction: the host starts the next round once everyone connected is ready.
+ */
+export async function startMemoryMatchRematch(
+  roomCode: string
+): Promise<MultiplayerRoomDocument> {
+  const normalizedCode = normalizeRoomCode(roomCode);
+  const user = await ensureAnonymousSession();
+  const roomRef = getDocRef<MultiplayerRoomDocument>(ROOMS_COLLECTION, normalizedCode);
+
+  return runFirestoreTransaction(async (transaction) => {
+    const snap = await transaction.get(roomRef);
+    if (!snap.exists()) {
+      throw new MultiplayerRoomError('ROOM_NOT_FOUND', 'Room no longer exists.');
+    }
+
+    const nextRoom = applyStartMemoryMatchRematch({
+      room: snap.data(),
+      callerUid: user.uid,
+      nowMs: Date.now(),
+    });
+
+    if (typeof transaction.update === 'function') {
+      transaction.update(roomRef, {
+        status: nextRoom.status,
+        players: nextRoom.players,
+        currentTurnUid: nextRoom.currentTurnUid,
+        startedAt: nextRoom.startedAt,
+        completedAt: nextRoom.completedAt,
+        lastActivityAt: nextRoom.lastActivityAt,
+        expiresAt: nextRoom.expiresAt,
+        memoryMatchState: nextRoom.memoryMatchState,
+      });
+    } else {
+      transaction.set(roomRef, nextRoom);
+    }
+    return nextRoom;
+  });
 }
 
 /**
@@ -743,7 +957,8 @@ export async function selectMemoryMatchMultiplayerCard(
  * Firestore transaction: Turns a mismatched pair face down and advances the turn.
  */
 export async function resolveMemoryMatchMultiplayerMismatch(
-  roomCode: string
+  roomCode: string,
+  expectedRoundNumber?: number
 ): Promise<MultiplayerRoomDocument | null> {
   const normalizedCode = normalizeRoomCode(roomCode);
   await ensureAnonymousSession();
@@ -761,10 +976,20 @@ export async function resolveMemoryMatchMultiplayerMismatch(
       return currentRoom;
     }
 
+    const currentRound = mm.roundNumber ?? 1;
+    if (expectedRoundNumber !== undefined && currentRound !== expectedRoundNumber) {
+      return currentRoom;
+    }
+
     const nextRoom = applyResolveMemoryMatchMismatch({
       room: currentRoom,
+      expectedRoundNumber,
       nowMs: Date.now(),
     });
+
+    if (nextRoom === currentRoom) {
+      return currentRoom;
+    }
 
     if (typeof transaction.update === 'function') {
       transaction.update(roomRef, {

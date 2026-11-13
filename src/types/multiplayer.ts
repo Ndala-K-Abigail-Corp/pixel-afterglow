@@ -44,26 +44,77 @@ export const ROOM_EXPIRY_POLICIES_MS = {
 } as const;
 
 /**
- * Allowed player counts for Memory Match multiplayer rooms.
+ * Allowed player counts for Memory Match multiplayer rooms (2 to 8 players).
  */
-export type MemoryMultiplayerPlayerCount = 2 | 3 | 4;
+export type MemoryMultiplayerPlayerCount = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 /**
- * Board configuration per player count for Multiplayer Memory Match.
+ * Board configuration per player count for Multiplayer Memory Match:
+ * - 2 players -> 20 cards (10 pairs), min 2 players to start
+ * - 3 players -> 40 cards (20 pairs), min 3 players to start
+ * - 4 players -> 60 cards (30 pairs), min 3 players to start
+ * - 5 players -> 100 cards (50 pairs), min 3 players to start
+ * - 6 players -> 100 cards (50 pairs), min 3 players to start
+ * - 7 players -> 100 cards (50 pairs), min 3 players to start
+ * - 8 players -> 100 cards (50 pairs), min 3 players to start
  */
 export interface MemoryMultiplayerBoardConfig {
   maxPlayers: MemoryMultiplayerPlayerCount;
-  totalCards: 20 | 40 | 60;
-  matchingPairs: 10 | 20 | 30;
+  minPlayersToStart: 2 | 3;
+  totalCards: 20 | 40 | 60 | 100;
+  matchingPairs: 10 | 20 | 30 | 50;
 }
 
 export const MEMORY_MULTIPLAYER_CONFIGS: Readonly<
   Record<MemoryMultiplayerPlayerCount, MemoryMultiplayerBoardConfig>
 > = {
-  2: { maxPlayers: 2, totalCards: 20, matchingPairs: 10 },
-  3: { maxPlayers: 3, totalCards: 40, matchingPairs: 20 },
-  4: { maxPlayers: 4, totalCards: 60, matchingPairs: 30 },
+  2: { maxPlayers: 2, minPlayersToStart: 2, totalCards: 20, matchingPairs: 10 },
+  3: { maxPlayers: 3, minPlayersToStart: 3, totalCards: 40, matchingPairs: 20 },
+  4: { maxPlayers: 4, minPlayersToStart: 3, totalCards: 60, matchingPairs: 30 },
+  5: { maxPlayers: 5, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
+  6: { maxPlayers: 6, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
+  7: { maxPlayers: 7, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
+  8: { maxPlayers: 8, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
 };
+
+/**
+ * Selectable room-capacity presets shown in the Memory Match room creation UI:
+ * - 2P -> maxPlayers: 2, minPlayersToStart: 2, 20 cards (10 pairs)
+ * - 3P -> maxPlayers: 3, minPlayersToStart: 3, 40 cards (20 pairs)
+ * - 4P -> maxPlayers: 4, minPlayersToStart: 3, 60 cards (30 pairs)
+ * - 5–8P -> maxPlayers: 8, minPlayersToStart: 3, 100 cards (50 pairs)
+ */
+export type MemorySelectableRoomCapacity = 2 | 3 | 4 | 8;
+
+export interface MemoryRoomCapacityOption {
+  label: '2P' | '3P' | '4P' | '5–8P';
+  maxPlayers: MemorySelectableRoomCapacity;
+  minPlayersToStart: 2 | 3;
+  totalCards: 20 | 40 | 60 | 100;
+  matchingPairs: 10 | 20 | 30 | 50;
+}
+
+export const MEMORY_ROOM_CAPACITY_OPTIONS: ReadonlyArray<MemoryRoomCapacityOption> = [
+  { label: '2P', maxPlayers: 2, minPlayersToStart: 2, totalCards: 20, matchingPairs: 10 },
+  { label: '3P', maxPlayers: 3, minPlayersToStart: 3, totalCards: 40, matchingPairs: 20 },
+  { label: '4P', maxPlayers: 4, minPlayersToStart: 3, totalCards: 60, matchingPairs: 30 },
+  { label: '5–8P', maxPlayers: 8, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
+] as const;
+
+/**
+ * Returns the minimum number of joined players required for the host to start the game:
+ * - Capacity 2 (or Tic-Tac-Toe) -> minimum 2 players
+ * - Capacity 3, 4, 5, 6, 7, or 8 -> minimum 3 players
+ */
+export function getMinimumPlayersToStart(
+  maxPlayers: number,
+  gameType: MultiplayerGameType = 'memory-match'
+): 2 | 3 {
+  if (gameType === 'tic-tac-toe' || maxPlayers <= 2) {
+    return 2;
+  }
+  return 3;
+}
 
 /**
  * Player connection status tracked in a room.
@@ -131,6 +182,8 @@ export interface MemoryMatchMultiplayerState {
   cards: MultiplayerMemoryCard[];
   totalPairs: number;
   matchedPairs: number;
+  /** Current round within this room (starts at 1, incremented on each rematch). Scores are per-round. */
+  roundNumber?: number;
   /** Map of pairKey -> UID of the player who matched that pair (immutable per pair once set) */
   matchedByPairKey?: Record<string, string>;
   /** The pairKey matched on the most recent matching move, or null */

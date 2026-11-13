@@ -28,8 +28,10 @@ import {
   voteTicTacToeRematch,
   startTicTacToeRematch,
 } from '../../logic/ticTacToeMultiplayer';
-import { isPlayerEffectivelyConnected } from '../../logic/multiplayerRoom';
-import { formatFirebaseError } from '../../lib/firebase';
+import {
+  isPlayerEffectivelyConnected,
+  getUserFriendlyMultiplayerError,
+} from '../../logic/multiplayerRoom';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
 import { useAudio } from '../../context/AudioContext';
@@ -48,10 +50,17 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
     isHost,
     isLoading,
     isReconnecting,
+    isSynchronizing,
+    isConnected,
     error,
     preferredNickname,
+    invitedRoomCode,
+    invitationStatus,
+    invitationRoomInfo,
+    dismissInvitation,
     createRoom,
     joinRoom,
+    syncRoom,
     leaveRoom,
     closeRoom,
     clearError,
@@ -108,9 +117,10 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
     if (!room) return;
     setActionError(null);
     try {
-      await startTicTacToeMultiplayerGame(room.roomCode);
+      const updated = await startTicTacToeMultiplayerGame(room.roomCode);
+      syncRoom?.(updated);
     } catch (err) {
-      setActionError(formatFirebaseError(err).formatted);
+      setActionError(getUserFriendlyMultiplayerError(err, 'start-game'));
     }
   };
 
@@ -131,9 +141,10 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
     playMove(ttt.currentTurnSymbol);
 
     try {
-      await makeTicTacToeMultiplayerMove(room.roomCode, cellIndex);
+      const updated = await makeTicTacToeMultiplayerMove(room.roomCode, cellIndex);
+      syncRoom?.(updated);
     } catch (err) {
-      setActionError(formatFirebaseError(err).formatted);
+      setActionError(getUserFriendlyMultiplayerError(err, 'game-action'));
     } finally {
       setIsSubmittingMove(false);
     }
@@ -144,9 +155,10 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
     playClick();
     setActionError(null);
     try {
-      await voteTicTacToeRematch(room.roomCode);
+      const updated = await voteTicTacToeRematch(room.roomCode);
+      syncRoom?.(updated);
     } catch (err) {
-      setActionError(formatFirebaseError(err).formatted);
+      setActionError(getUserFriendlyMultiplayerError(err, 'rematch'));
     }
   };
 
@@ -155,9 +167,10 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
     playClick();
     setActionError(null);
     try {
-      await startTicTacToeRematch(room.roomCode);
+      const updated = await startTicTacToeRematch(room.roomCode);
+      syncRoom?.(updated);
     } catch (err) {
-      setActionError(formatFirebaseError(err).formatted);
+      setActionError(getUserFriendlyMultiplayerError(err, 'rematch'));
     }
   };
 
@@ -184,8 +197,14 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
         isHost={isHost}
         isLoading={isLoading}
         isReconnecting={isReconnecting}
+        isSynchronizing={isSynchronizing}
+        isConnected={isConnected}
         error={actionError || error}
         preferredNickname={preferredNickname}
+        invitedRoomCode={invitedRoomCode}
+        invitationStatus={invitationStatus}
+        invitationRoomInfo={invitationRoomInfo}
+        onDismissInvitation={dismissInvitation}
         onCreateRoom={createRoom}
         onJoinRoom={joinRoom}
         onStartGame={handleStartGame}

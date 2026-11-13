@@ -11,6 +11,7 @@ import {
   MemoryMultiplayerPlayerCount,
   MEMORY_MULTIPLAYER_CONFIGS,
   ROOM_EXPIRY_POLICIES_MS,
+  getMinimumPlayersToStart,
   computeRoomExpiresAt,
   isRoomExpired,
   isValidRoomStateTransition,
@@ -24,38 +25,36 @@ import {
   subscribeToDocument,
   runFirestoreTransaction,
   isTransactionInFlight,
+  type FirestoreSnapshotMetadata,
 } from '../lib/firestore';
 import type { Unsubscribe } from 'firebase/firestore';
+import {
+  MultiplayerRoomError,
+  type MultiplayerErrorCode,
+  MULTIPLAYER_USER_MESSAGES,
+  resolveMultiplayerError,
+  getUserFriendlyMultiplayerError,
+  logMultiplayerDiagnostic,
+} from '../utils/multiplayerErrors';
+import {
+  validateRoomCreationInput,
+  validateRoomJoinInput,
+  parseFirestoreRoomDocument,
+} from '../schemas/multiplayerSchemas';
+
+export {
+  MultiplayerRoomError,
+  type MultiplayerErrorCode,
+  MULTIPLAYER_USER_MESSAGES,
+  resolveMultiplayerError,
+  getUserFriendlyMultiplayerError,
+  logMultiplayerDiagnostic,
+};
 
 export const ROOMS_COLLECTION = 'rooms';
 export const ROOM_CODE_LENGTH = 6;
 // Unambiguous uppercase alphanumeric characters (excludes 0, O, 1, I, L)
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-
-export type MultiplayerErrorCode =
-  | 'INVALID_NICKNAME'
-  | 'INVALID_ROOM_CODE'
-  | 'ROOM_NOT_FOUND'
-  | 'ROOM_FULL'
-  | 'ROOM_CLOSED'
-  | 'ROOM_EXPIRED'
-  | 'GAME_ALREADY_STARTED'
-  | 'NOT_HOST'
-  | 'NOT_ENOUGH_PLAYERS'
-  | 'PLAYER_DISCONNECTED'
-  | 'INVALID_STATE_TRANSITION'
-  | 'NOT_YOUR_TURN'
-  | 'INVALID_MOVE';
-
-export class MultiplayerRoomError extends Error {
-  public readonly code: MultiplayerErrorCode;
-
-  constructor(code: MultiplayerErrorCode, message: string) {
-    super(message);
-    this.name = 'MultiplayerRoomError';
-    this.code = code;
-  }
-}
 
 /**
  * Normalizes a user-entered room code (trims whitespace and converts to uppercase)
@@ -154,7 +153,7 @@ export function buildInitialRoomDocument(params: {
   ) {
     throw new MultiplayerRoomError(
       'INVALID_STATE_TRANSITION',
-      'Memory Match rooms must be configured for 2, 3, or 4 players.'
+      'Memory Match rooms must be configured for 2 to 8 players.'
     );
   }
 
@@ -192,9 +191,26 @@ export function buildInitialRoomDocument(params: {
 }
 
 /**
+ * Checks whether another player in the room is already using the candidate nickname (case-insensitive).
+ */
+export function hasDuplicateNicknameInRoom(
+  room: Pick<MultiplayerRoomDocument, 'players'>,
+  candidateNickname: string,
+  excludeUid?: string
+): boolean {
+  const normalizedCandidate = sanitizeNickname(candidateNickname).toLowerCase();
+  if (!normalizedCandidate) return false;
+  return Object.values(room.players).some(
+    (player) =>
+      player.uid !== excludeUid &&
+      sanitizeNickname(player.nickname).toLowerCase() === normalizedCandidate
+  );
+}
+
+/**
  * Pure validator & state reducer for a player joining or reconnecting to a room.
- * Prevents duplicate entries, rejects full rooms, rejects started games (for new players),
- * and rejects expired/closed rooms.
+ * Prevents duplicate entries, rejects duplicate nicknames, rejects full rooms,
+ * rejects started games (for new players), and rejects expired/closed rooms.
  */
 export function applyPlayerJoinOrReconnect(params: {
   room: MultiplayerRoomDocument;
@@ -227,10 +243,14 @@ export function applyPlayerJoinOrReconnect(params: {
 
   // Reconnection path: player is already a member of this room
   if (existingPlayer) {
-    const updatedNickname =
+    const candidateNickname =
       params.nickname && isValidNickname(params.nickname)
         ? sanitizeNickname(params.nickname)
         : existingPlayer.nickname;
+
+    const updatedNickname = hasDuplicateNicknameInRoom(room, candidateNickname, uid)
+      ? existingPlayer.nickname
+      : candidateNickname;
 
     const updatedPlayers: Record<string, RoomPlayer> = {
       ...room.players,
@@ -254,14 +274,14 @@ export function applyPlayerJoinOrReconnect(params: {
   if (room.status !== 'waiting') {
     throw new MultiplayerRoomError(
       'GAME_ALREADY_STARTED',
-      'Cannot join because this game has already started.'
+      'This game has already started. New players can no longer join.'
     );
   }
 
   if (room.playerOrder.length >= room.maxPlayers) {
     throw new MultiplayerRoomError(
       'ROOM_FULL',
-      `This room is already full (${room.maxPlayers}/${room.maxPlayers} players).`
+      'This room is full. Try joining another room.'
     );
   }
 
@@ -269,7 +289,14 @@ export function applyPlayerJoinOrReconnect(params: {
   if (!isValidNickname(sanitizedNickname)) {
     throw new MultiplayerRoomError(
       'INVALID_NICKNAME',
-      'Nickname must be between 2 and 16 characters.'
+      'Please enter a valid arcade nickname.'
+    );
+  }
+
+  if (hasDuplicateNicknameInRoom(room, sanitizedNickname, uid)) {
+    throw new MultiplayerRoomError(
+      'DUPLICATE_NICKNAME',
+      'This nickname is already being used in this room.'
     );
   }
 
@@ -324,10 +351,17 @@ export function validateHostCanStartGame(
       `Cannot start game from room status "${room.status}".`
     );
   }
-  if (room.playerOrder.length < room.maxPlayers) {
+  const minPlayers = getMinimumPlayersToStart(room.maxPlayers, room.gameType);
+  if (room.playerOrder.length < minPlayers) {
     throw new MultiplayerRoomError(
       'NOT_ENOUGH_PLAYERS',
-      `Waiting for players (${room.playerOrder.length}/${room.maxPlayers} joined).`
+      `Waiting for players (${room.playerOrder.length}/${room.maxPlayers} joined, minimum ${minPlayers} required).`
+    );
+  }
+  if (room.playerOrder.length > room.maxPlayers) {
+    throw new MultiplayerRoomError(
+      'ROOM_FULL',
+      `Room exceeds maximum capacity (${room.playerOrder.length}/${room.maxPlayers}).`
     );
   }
 
@@ -454,6 +488,7 @@ export async function createMultiplayerRoom(params: {
   hostNickname: string;
   maxPlayers?: MemoryMultiplayerPlayerCount;
 }): Promise<{ room: MultiplayerRoomDocument; uid: string }> {
+  const validated = validateRoomCreationInput(params);
   const user = await ensureAnonymousSession();
   const uid = user.uid;
   const maxAttempts = 5;
@@ -476,10 +511,10 @@ export async function createMultiplayerRoom(params: {
 
         const newRoom = buildInitialRoomDocument({
           roomCode: candidateCode,
-          gameType: params.gameType,
+          gameType: validated.gameType,
           hostUid: uid,
-          hostNickname: params.hostNickname,
-          maxPlayers: params.maxPlayers,
+          hostNickname: validated.hostNickname,
+          maxPlayers: validated.maxPlayers,
           nowMs,
         });
 
@@ -487,8 +522,8 @@ export async function createMultiplayerRoom(params: {
         return newRoom;
       });
 
-      saveActiveRoomSession(params.gameType, createdRoom.roomCode);
-      savePreferredNickname(params.hostNickname);
+      saveActiveRoomSession(validated.gameType, createdRoom.roomCode);
+      savePreferredNickname(validated.hostNickname);
       return { room: createdRoom, uid };
     } catch (err) {
       if (err instanceof Error && err.message === 'CODE_COLLISION') {
@@ -506,81 +541,126 @@ export async function createMultiplayerRoom(params: {
 
 /**
  * Joins an existing multiplayer room by room code (or reconnects if already in the room).
+ * Performs Zod input validation, atomic transactional verification, and post-conflict
+ * state inspection so concurrent joins to the final slot always report ROOM_FULL
+ * rather than raw Firestore permission errors.
  */
 export async function joinMultiplayerRoom(params: {
   roomCode: string;
   nickname: string;
   expectedGameType?: MultiplayerGameType;
 }): Promise<{ room: MultiplayerRoomDocument; uid: string }> {
-  const normalizedCode = normalizeRoomCode(params.roomCode);
-  if (!isValidRoomCodeFormat(normalizedCode)) {
-    throw new MultiplayerRoomError(
-      'INVALID_ROOM_CODE',
-      'Please enter a valid 6-character room code.'
-    );
-  }
+  const validated = validateRoomJoinInput(params);
+  const normalizedCode = validated.roomCode;
 
   const user = await ensureAnonymousSession();
   const uid = user.uid;
   const roomRef = getDocRef<MultiplayerRoomDocument>(ROOMS_COLLECTION, normalizedCode);
 
-  let expiredRoomToCleanUp = false;
+  const maxJoinAttempts = 3;
 
-  try {
-    const updatedRoom = await runFirestoreTransaction(async (transaction) => {
-      const snap = await transaction.get(roomRef);
-      if (!snap.exists()) {
-        throw new MultiplayerRoomError(
-          'ROOM_NOT_FOUND',
-          `Room "${normalizedCode}" was not found. Check the code and try again.`
-        );
-      }
+  for (let attempt = 0; attempt < maxJoinAttempts; attempt++) {
+    let expiredRoomToCleanUp = false;
+    try {
+      const updatedRoom = await runFirestoreTransaction(async (transaction) => {
+        const snap = await transaction.get(roomRef);
+        if (!snap.exists()) {
+          throw new MultiplayerRoomError(
+            'ROOM_NOT_FOUND',
+            MULTIPLAYER_USER_MESSAGES.ROOM_NOT_FOUND
+          );
+        }
 
-      const currentRoom = snap.data();
-      const nowMs = Date.now();
+        const rawData = snap.data();
+        const currentRoom = parseFirestoreRoomDocument(rawData, normalizedCode) ?? rawData;
+        if (
+          !currentRoom ||
+          typeof currentRoom !== 'object' ||
+          !currentRoom.players ||
+          !Array.isArray(currentRoom.playerOrder)
+        ) {
+          throw new MultiplayerRoomError(
+            'INVALID_ROOM_DATA',
+            MULTIPLAYER_USER_MESSAGES.INVALID_ROOM_DATA
+          );
+        }
 
-      if (isRoomExpired(currentRoom, nowMs)) {
-        expiredRoomToCleanUp = true;
-        throw new MultiplayerRoomError(
-          currentRoom.status === 'closed' ? 'ROOM_CLOSED' : 'ROOM_EXPIRED',
-          currentRoom.status === 'closed'
-            ? 'This room was closed by the host.'
-            : 'This room has expired due to inactivity.'
-        );
-      }
+        const nowMs = Date.now();
 
-      const nextRoom = applyPlayerJoinOrReconnect({
-        room: currentRoom,
-        uid,
-        nickname: params.nickname,
-        expectedGameType: params.expectedGameType,
-        nowMs,
+        if (isRoomExpired(currentRoom, nowMs)) {
+          expiredRoomToCleanUp = true;
+          throw new MultiplayerRoomError(
+            currentRoom.status === 'closed' ? 'ROOM_CLOSED' : 'ROOM_EXPIRED',
+            currentRoom.status === 'closed'
+              ? MULTIPLAYER_USER_MESSAGES.ROOM_CLOSED
+              : MULTIPLAYER_USER_MESSAGES.ROOM_EXPIRED
+          );
+        }
+
+        const nextRoom = applyPlayerJoinOrReconnect({
+          room: currentRoom,
+          uid,
+          nickname: validated.nickname,
+          expectedGameType: validated.expectedGameType,
+          nowMs,
+        });
+
+        if (typeof transaction.update === 'function') {
+          transaction.update(roomRef, {
+            players: nextRoom.players,
+            playerOrder: nextRoom.playerOrder,
+            lastActivityAt: nextRoom.lastActivityAt,
+            expiresAt: nextRoom.expiresAt,
+          });
+        } else {
+          transaction.set(roomRef, nextRoom);
+        }
+        return nextRoom;
       });
 
-      if (typeof transaction.update === 'function') {
-        transaction.update(roomRef, {
-          players: nextRoom.players,
-          playerOrder: nextRoom.playerOrder,
-          lastActivityAt: nextRoom.lastActivityAt,
-          expiresAt: nextRoom.expiresAt,
-        });
-      } else {
-        transaction.set(roomRef, nextRoom);
+      saveActiveRoomSession(updatedRoom.gameType, updatedRoom.roomCode);
+      savePreferredNickname(validated.nickname);
+      return { room: updatedRoom, uid };
+    } catch (err) {
+      if (expiredRoomToCleanUp) {
+        await deleteDocument(ROOMS_COLLECTION, normalizedCode).catch(() => {});
       }
-      return nextRoom;
-    });
 
-    saveActiveRoomSession(updatedRoom.gameType, updatedRoom.roomCode);
-    if (isValidNickname(params.nickname)) {
-      savePreferredNickname(params.nickname);
+      if (err instanceof MultiplayerRoomError) {
+        throw err;
+      }
+
+      // Inspect latest room state when a concurrent commit or security-rule diff collision occurred
+      const latestRoom = await fetchDocument<MultiplayerRoomDocument>(
+        ROOMS_COLLECTION,
+        normalizedCode
+      ).catch(() => null);
+
+      if (latestRoom) {
+        const validatedLatest =
+          parseFirestoreRoomDocument(latestRoom, normalizedCode) ?? latestRoom;
+        // Throws ROOM_FULL, GAME_ALREADY_STARTED, ROOM_EXPIRED, ROOM_CLOSED, or DUPLICATE_NICKNAME
+        applyPlayerJoinOrReconnect({
+          room: validatedLatest,
+          uid,
+          nickname: validated.nickname,
+          expectedGameType: validated.expectedGameType,
+          nowMs: Date.now(),
+        });
+
+        if (attempt < maxJoinAttempts - 1) {
+          continue;
+        }
+      }
+
+      throw err;
     }
-    return { room: updatedRoom, uid };
-  } catch (err) {
-    if (expiredRoomToCleanUp) {
-      await deleteDocument(ROOMS_COLLECTION, normalizedCode).catch(() => {});
-    }
-    throw err;
   }
+
+  throw new MultiplayerRoomError(
+    'UNEXPECTED_ERROR',
+    MULTIPLAYER_USER_MESSAGES.UNEXPECTED_ERROR
+  );
 }
 
 /**
@@ -791,36 +871,148 @@ export async function checkAndExpireRoomIfNeeded(
 }
 
 /**
+ * Extracts the current monotonic round number from a room document (0 while in waiting room).
+ */
+export function getRoomRoundNumber(room: MultiplayerRoomDocument | null | undefined): number {
+  if (!room) return 0;
+  if (room.gameType === 'memory-match') {
+    return room.memoryMatchState?.roundNumber ?? (room.status === 'waiting' ? 0 : 1);
+  }
+  return room.ticTacToeState?.roundNumber ?? (room.status === 'waiting' ? 0 : 1);
+}
+
+/**
+ * Determines whether an incoming room document snapshot should be accepted over the current
+ * React state. Prevents stale cached snapshots or out-of-order updates from an older round
+ * from overwriting a newly started round or fresher game state.
+ */
+export function shouldAcceptIncomingRoomState(
+  currentRoom: MultiplayerRoomDocument | null,
+  incomingRoom: MultiplayerRoomDocument,
+  metadata?: FirestoreSnapshotMetadata
+): boolean {
+  if (!currentRoom || currentRoom.roomCode !== incomingRoom.roomCode) {
+    return true;
+  }
+
+  const currentRound = getRoomRoundNumber(currentRoom);
+  const incomingRound = getRoomRoundNumber(incomingRoom);
+
+  // Never allow a previous round to overwrite a newer round
+  if (incomingRound < currentRound) {
+    return false;
+  }
+
+  // Always accept a newly started round
+  if (incomingRound > currentRound) {
+    return true;
+  }
+
+  // Within the same round, prevent regressing from active/completed back to waiting
+  if (currentRoom.status !== 'waiting' && incomingRoom.status === 'waiting') {
+    return false;
+  }
+
+  // Within the same round, prevent regressing from completed back to in_progress
+  if (currentRoom.status === 'completed' && incomingRoom.status === 'in_progress') {
+    return false;
+  }
+
+  // Within the same Memory Match round, matchedPairs is monotonically non-decreasing
+  if (
+    currentRoom.memoryMatchState &&
+    incomingRoom.memoryMatchState &&
+    incomingRoom.memoryMatchState.matchedPairs < currentRoom.memoryMatchState.matchedPairs
+  ) {
+    return false;
+  }
+
+  // Do not replace fresher state with an older cached snapshot
+  if (
+    metadata?.fromCache &&
+    !metadata.hasPendingWrites &&
+    incomingRoom.lastActivityAt < currentRoom.lastActivityAt
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Subscribes to real-time updates on a multiplayer room document.
- * Automatically intercepts expired rooms at the application layer.
+ * Validates incoming documents with Zod, tracks snapshot metadata, and intercepts expired rooms.
  */
 export function subscribeToMultiplayerRoom(
   roomCode: string,
   callbacks: {
-    onRoomChange: (room: MultiplayerRoomDocument | null, expiredOrClosedReason?: RoomStatus) => void;
+    onRoomChange: (
+      room: MultiplayerRoomDocument | null,
+      expiredOrClosedReason?: RoomStatus,
+      metadata?: FirestoreSnapshotMetadata
+    ) => void;
     onError?: (error: Error) => void;
   }
 ): Unsubscribe {
   const normalizedCode = normalizeRoomCode(roomCode);
+  let latestMetadata: FirestoreSnapshotMetadata | undefined;
+
   return subscribeToDocument<MultiplayerRoomDocument>(ROOMS_COLLECTION, normalizedCode, {
-    onData: (room) => {
-      if (!room) {
-        callbacks.onRoomChange(null);
+    onMetadata: (meta) => {
+      latestMetadata = meta;
+    },
+    onData: (rawRoom) => {
+      if (!rawRoom) {
+        callbacks.onRoomChange(null, undefined, latestMetadata);
+        return;
+      }
+
+      const validated = parseFirestoreRoomDocument(rawRoom, normalizedCode) ?? rawRoom;
+      if (
+        !validated ||
+        typeof validated !== 'object' ||
+        !validated.players ||
+        !Array.isArray(validated.playerOrder)
+      ) {
         return;
       }
 
       const nowMs = Date.now();
-      if (room.status === 'closed') {
-        callbacks.onRoomChange(null, 'closed');
+      if (validated.status === 'closed') {
+        callbacks.onRoomChange(null, 'closed', latestMetadata);
         return;
       }
-      if (isRoomExpired(room, nowMs)) {
-        void checkAndExpireRoomIfNeeded(room, nowMs);
-        callbacks.onRoomChange(null, 'expired');
+      if (isRoomExpired(validated, nowMs)) {
+        void checkAndExpireRoomIfNeeded(validated, nowMs);
+        callbacks.onRoomChange(null, 'expired', latestMetadata);
         return;
       }
 
-      callbacks.onRoomChange(room);
+      // Clone top-level and nested state references so React always detects updates
+      const freshRoom: MultiplayerRoomDocument = {
+        ...validated,
+        players: { ...validated.players },
+        playerOrder: [...validated.playerOrder],
+        ticTacToeState: validated.ticTacToeState
+          ? {
+              ...validated.ticTacToeState,
+              board: [...validated.ticTacToeState.board],
+              scores: { ...validated.ticTacToeState.scores },
+            }
+          : null,
+        memoryMatchState: validated.memoryMatchState
+          ? {
+              ...validated.memoryMatchState,
+              cards: validated.memoryMatchState.cards.map((c) => ({ ...c })),
+              matchedByPairKey: { ...(validated.memoryMatchState.matchedByPairKey ?? {}) },
+              turnOrderUids: [...validated.memoryMatchState.turnOrderUids],
+              flippedCardIds: [...validated.memoryMatchState.flippedCardIds],
+              winnerUids: [...validated.memoryMatchState.winnerUids],
+            }
+          : null,
+      };
+
+      callbacks.onRoomChange(freshRoom, undefined, latestMetadata);
     },
     onError: callbacks.onError,
   });
@@ -890,5 +1082,333 @@ export function loadPreferredNickname(): string {
     return storage.getItem(NICKNAME_STORAGE_KEY) ?? '';
   } catch {
     return '';
+  }
+}
+
+// ============================================================================
+// Direct Room Invitations, Shareable URLs & Pre-Join Invitation Validation
+// ============================================================================
+
+export interface ParsedRoomInvitation {
+  rawRoomParam: string;
+  normalizedRoomCode: string;
+  isValidFormat: boolean;
+  gameType: MultiplayerGameType;
+}
+
+export interface RoomInvitationShareData {
+  roomCode: string;
+  invitationUrl: string;
+  title: string;
+  message: string;
+}
+
+export interface RoomInvitationValidationResult {
+  status: 'joinable' | 'invalid' | 'unavailable';
+  normalizedRoomCode: string;
+  errorCode: MultiplayerErrorCode | null;
+  userMessage: string | null;
+  room: MultiplayerRoomDocument | null;
+}
+
+/**
+ * Generates a direct shareable invitation URL containing the normalized room code.
+ * Uses the actual runtime origin (window.location.origin) rather than hardcoding
+ * a development URL, and falls back to https://pixel-afterglow.vercel.app in SSR/test contexts.
+ */
+export function buildRoomInvitationUrl(
+  roomCode: string,
+  gameType: MultiplayerGameType = 'memory-match',
+  baseOrigin?: string
+): string {
+  const normalizedCode = normalizeRoomCode(roomCode);
+  const resolvedOrigin =
+    baseOrigin ??
+    (typeof window !== 'undefined' &&
+    window.location?.origin &&
+    window.location.origin !== 'null'
+      ? window.location.origin
+      : 'https://pixel-afterglow.vercel.app');
+  const cleanOrigin = resolvedOrigin.replace(/\/+$/, '');
+  const params = new URLSearchParams({
+    game: gameType,
+    room: normalizedCode,
+  });
+  return `${cleanOrigin}/?${params.toString()}`;
+}
+
+/**
+ * Builds the complete share payload (room code, direct invitation link, title, and message)
+ * for Web Share API and clipboard fallback.
+ */
+export function buildRoomInvitationShareData(params: {
+  roomCode: string;
+  gameType?: MultiplayerGameType;
+  gameTitle?: string;
+  baseOrigin?: string;
+}): RoomInvitationShareData {
+  const normalizedCode = normalizeRoomCode(params.roomCode);
+  const gameType = params.gameType ?? 'memory-match';
+  const gameTitle =
+    params.gameTitle ??
+    (gameType === 'tic-tac-toe' ? 'Tic-Tac-Toe' : 'Memory Match');
+  const invitationUrl = buildRoomInvitationUrl(
+    normalizedCode,
+    gameType,
+    params.baseOrigin
+  );
+  const title = `Pixel Afterglow – ${gameTitle} Room ${normalizedCode}`;
+  const message = `You're invited to play ${gameTitle} on Pixel Afterglow! Join my room (${normalizedCode}) using this link: ${invitationUrl}. Enter your arcade nickname to join.`;
+
+  return {
+    roomCode: normalizedCode,
+    invitationUrl,
+    title,
+    message,
+  };
+}
+
+/**
+ * Parses a room invitation from a URL string or Location-like object (defaults to window.location).
+ * Supports both root query params (`/?game=memory-match&room=NFGNTR` or `/?room=NFGNTR`)
+ * and path-based routes (`/games/memory-match?room=NFGNTR` or `/games/memory-match/NFGNTR`).
+ */
+export function parseRoomInvitationFromUrl(
+  input?:
+    | string
+    | {
+        search?: string;
+        pathname?: string;
+        hash?: string;
+        href?: string;
+      }
+): ParsedRoomInvitation | null {
+  let pathname: string;
+  let search: string;
+
+  if (typeof input === 'string') {
+    try {
+      const parsed = new URL(input, 'https://pixel-afterglow.vercel.app');
+      pathname = parsed.pathname;
+      search = parsed.search;
+    } catch {
+      return null;
+    }
+  } else if (input && typeof input === 'object') {
+    pathname = input.pathname ?? '';
+    search = input.search ?? '';
+  } else if (typeof window !== 'undefined' && window.location) {
+    pathname = window.location.pathname ?? '';
+    search = window.location.search ?? '';
+  } else {
+    return null;
+  }
+
+  const params = new URLSearchParams(search);
+  let rawRoomParam =
+    params.get('room') ?? params.get('code') ?? params.get('invite') ?? '';
+
+  // Also support path segment e.g. /games/memory-match/NFGNTR
+  if (!rawRoomParam && pathname) {
+    const pathMatch = pathname.match(
+      /^\/(?:games\/)?(?:memory-match|tic-tac-toe)\/([^/?#]+)$/i
+    );
+    if (pathMatch?.[1]) {
+      rawRoomParam = decodeURIComponent(pathMatch[1]);
+    }
+  }
+
+  if (!rawRoomParam || !rawRoomParam.trim()) {
+    return null;
+  }
+
+  const rawGameParam = (params.get('game') ?? '').trim().toLowerCase();
+  const lowerPath = pathname.toLowerCase();
+  const gameType: MultiplayerGameType =
+    rawGameParam === 'tic-tac-toe' ||
+    rawGameParam === 'tictactoe' ||
+    lowerPath.includes('tic-tac-toe') ||
+    lowerPath.includes('tictactoe')
+      ? 'tic-tac-toe'
+      : 'memory-match';
+
+  const normalizedRoomCode = normalizeRoomCode(rawRoomParam);
+  const isValidFormat = isValidRoomCodeFormat(normalizedRoomCode);
+
+  return {
+    rawRoomParam: rawRoomParam.trim(),
+    normalizedRoomCode,
+    isValidFormat,
+    gameType,
+  };
+}
+
+/**
+ * Checks whether the current browser URL contains a room invitation for the given game type.
+ */
+export function hasRoomInvitationInUrl(
+  expectedGameType?: MultiplayerGameType
+): boolean {
+  const invitation = parseRoomInvitationFromUrl();
+  if (!invitation) return false;
+  if (expectedGameType && invitation.gameType !== expectedGameType) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Removes room invitation query parameters from the current browser URL without reloading.
+ */
+export function clearRoomInvitationFromUrl(): void {
+  if (typeof window === 'undefined' || !window.location || !window.history?.replaceState) {
+    return;
+  }
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('room');
+    url.searchParams.delete('code');
+    url.searchParams.delete('invite');
+    url.searchParams.delete('game');
+    const cleanRelative =
+      url.pathname.startsWith('/games/')
+        ? '/'
+        : `${url.pathname}${url.search}${url.hash}`;
+    window.history.replaceState({}, '', cleanRelative || '/');
+  } catch {
+    // ignore URL manipulation errors in non-standard environments
+  }
+}
+
+/**
+ * Validates an invited room code against Firestore before the recipient clicks Join Room.
+ * Checks format, room existence, expiration, closed status, game-already-started status,
+ * and room capacity, returning a user-friendly status without ever exposing raw Firebase errors.
+ */
+export async function validateRoomInvitation(params: {
+  rawRoomCode: string;
+  expectedGameType?: MultiplayerGameType;
+  nowMs?: number;
+}): Promise<RoomInvitationValidationResult> {
+  const normalizedRoomCode = normalizeRoomCode(params.rawRoomCode);
+
+  if (!isValidRoomCodeFormat(normalizedRoomCode)) {
+    return {
+      status: 'invalid',
+      normalizedRoomCode,
+      errorCode: 'INVALID_ROOM_CODE',
+      userMessage: MULTIPLAYER_USER_MESSAGES.INVALID_ROOM_CODE,
+      room: null,
+    };
+  }
+
+  try {
+    const user = await ensureAnonymousSession();
+    const uid = user.uid;
+    const rawData = await fetchDocument<MultiplayerRoomDocument>(
+      ROOMS_COLLECTION,
+      normalizedRoomCode
+    );
+
+    if (!rawData) {
+      return {
+        status: 'unavailable',
+        normalizedRoomCode,
+        errorCode: 'ROOM_NOT_FOUND',
+        userMessage: MULTIPLAYER_USER_MESSAGES.ROOM_NOT_FOUND,
+        room: null,
+      };
+    }
+
+    const room = parseFirestoreRoomDocument(rawData, normalizedRoomCode) ?? rawData;
+    if (
+      !room ||
+      typeof room !== 'object' ||
+      !room.players ||
+      !Array.isArray(room.playerOrder)
+    ) {
+      return {
+        status: 'unavailable',
+        normalizedRoomCode,
+        errorCode: 'ROOM_NOT_FOUND',
+        userMessage: MULTIPLAYER_USER_MESSAGES.ROOM_NOT_FOUND,
+        room: null,
+      };
+    }
+
+    if (params.expectedGameType && room.gameType !== params.expectedGameType) {
+      return {
+        status: 'unavailable',
+        normalizedRoomCode,
+        errorCode: 'ROOM_NOT_FOUND',
+        userMessage: MULTIPLAYER_USER_MESSAGES.ROOM_NOT_FOUND,
+        room: null,
+      };
+    }
+
+    const nowMs = params.nowMs ?? Date.now();
+
+    if (room.status === 'closed') {
+      return {
+        status: 'unavailable',
+        normalizedRoomCode,
+        errorCode: 'ROOM_CLOSED',
+        userMessage: MULTIPLAYER_USER_MESSAGES.ROOM_CLOSED,
+        room: null,
+      };
+    }
+
+    if (isRoomExpired(room, nowMs)) {
+      await deleteDocument(ROOMS_COLLECTION, normalizedRoomCode).catch(() => {});
+      return {
+        status: 'unavailable',
+        normalizedRoomCode,
+        errorCode: 'ROOM_EXPIRED',
+        userMessage: MULTIPLAYER_USER_MESSAGES.ROOM_EXPIRED,
+        room: null,
+      };
+    }
+
+    const isAlreadyInRoom = Boolean(room.players[uid]);
+
+    if (room.status !== 'waiting' && !isAlreadyInRoom) {
+      return {
+        status: 'unavailable',
+        normalizedRoomCode,
+        errorCode: 'GAME_ALREADY_STARTED',
+        userMessage: MULTIPLAYER_USER_MESSAGES.GAME_ALREADY_STARTED,
+        room: null,
+      };
+    }
+
+    if (!isAlreadyInRoom && room.playerOrder.length >= room.maxPlayers) {
+      return {
+        status: 'unavailable',
+        normalizedRoomCode,
+        errorCode: 'ROOM_FULL',
+        userMessage: MULTIPLAYER_USER_MESSAGES.ROOM_FULL,
+        room: null,
+      };
+    }
+
+    return {
+      status: 'joinable',
+      normalizedRoomCode,
+      errorCode: null,
+      userMessage: null,
+      room,
+    };
+  } catch (err) {
+    logMultiplayerDiagnostic('validateRoomInvitation', err, {
+      roomCode: normalizedRoomCode,
+    });
+    const resolved = resolveMultiplayerError(err, 'join-room');
+    return {
+      status: 'unavailable',
+      normalizedRoomCode,
+      errorCode: resolved.code,
+      userMessage: resolved.userMessage,
+      room: null,
+    };
   }
 }

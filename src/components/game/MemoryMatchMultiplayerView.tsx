@@ -25,9 +25,12 @@ import {
   resolveMemoryMatchMultiplayerMismatch,
   getMemoryPlayerColor,
   getMatchedCardOwnerColor,
+  startMemoryMatchRematch,
 } from '../../logic/memoryMatchMultiplayer';
-import { isPlayerEffectivelyConnected } from '../../logic/multiplayerRoom';
-import { formatFirebaseError } from '../../lib/firebase';
+import {
+  isPlayerEffectivelyConnected,
+  getUserFriendlyMultiplayerError,
+} from '../../logic/multiplayerRoom';
 import { MemorySymbolIcon } from './MemorySymbolIcon';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
@@ -48,10 +51,17 @@ export const MemoryMatchMultiplayerView: React.FC<
     isHost,
     isLoading,
     isReconnecting,
+    isSynchronizing,
+    isConnected,
     error,
     preferredNickname,
+    invitedRoomCode,
+    invitationStatus,
+    invitationRoomInfo,
+    dismissInvitation,
     createRoom,
     joinRoom,
+    syncRoom,
     leaveRoom,
     closeRoom,
     clearError,
@@ -59,25 +69,35 @@ export const MemoryMatchMultiplayerView: React.FC<
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [isSubmittingCard, setIsSubmittingCard] = useState<boolean>(false);
+  const [isSubmittingRematch, setIsSubmittingRematch] = useState<boolean>(false);
   const [isCelebrationOpen, setIsCelebrationOpen] = useState<boolean>(false);
+  const [roundTransitionText, setRoundTransitionText] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
   const prevStatusRef = useRef<string | null>(null);
   const prevMatchedPairsRef = useRef<number>(0);
+  const prevRoundNumberRef = useRef<number>(1);
+  const roundTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => {
       setNowMs(Date.now());
     }, 5000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      if (roundTransitionTimerRef.current) {
+        clearTimeout(roundTransitionTimerRef.current);
+      }
+    };
   }, []);
 
   // Automatically resolve a mismatched pair after MISMATCH_REVEAL_DELAY_MS so cards turn face down.
-  // Only the active turn player resolves immediately (with host as a fallback) to avoid concurrent commits.
+  // Scoped by roundNumber so a timer from an older round can never affect a newly started round.
   const pendingResetAt = room?.memoryMatchState?.pendingResetAt ?? null;
   const activeRoomCode = room?.roomCode ?? null;
   const currentTurnUid = room?.currentTurnUid ?? null;
+  const currentRoundNumber = room?.memoryMatchState?.roundNumber ?? 1;
 
   useEffect(() => {
     if (!activeRoomCode || pendingResetAt === null || !uid) {
@@ -85,29 +105,54 @@ export const MemoryMatchMultiplayerView: React.FC<
     }
 
     const isTurnOwner = currentTurnUid === uid;
-    if (!isTurnOwner && !isHost) {
-      return;
-    }
-
-    const extraFallbackMs = isTurnOwner ? 50 : 1200;
+    const extraFallbackMs = isTurnOwner ? 50 : isHost ? 900 : 1800;
     const delayMs = Math.max(150, pendingResetAt - Date.now() + extraFallbackMs);
     const timeout = setTimeout(() => {
-      void resolveMemoryMatchMultiplayerMismatch(activeRoomCode).catch(() => {});
+      void resolveMemoryMatchMultiplayerMismatch(activeRoomCode, currentRoundNumber)
+        .then((updatedRoom) => {
+          if (updatedRoom) {
+            syncRoom?.(updatedRoom);
+          }
+        })
+        .catch(() => {});
     }, delayMs);
 
     return () => {
       clearTimeout(timeout);
     };
-  }, [activeRoomCode, pendingResetAt, currentTurnUid, uid, isHost]);
+  }, [activeRoomCode, pendingResetAt, currentTurnUid, currentRoundNumber, uid, isHost, syncRoom]);
 
-  // Sound & modal effects on match/completion transitions
+  // Sound, modal & round-transition effects on match/completion/rematch transitions
   useEffect(() => {
     if (!room || !room.memoryMatchState) return;
     const mm = room.memoryMatchState;
+    const currentRound = mm.roundNumber ?? 1;
+
+    if (currentRound > prevRoundNumberRef.current && room.status === 'in_progress') {
+      prevRoundNumberRef.current = currentRound;
+      prevMatchedPairsRef.current = 0;
+      prevStatusRef.current = 'in_progress';
+      setIsCelebrationOpen(false);
+      setActionError(null);
+      setRoundTransitionText(`GET READY – ROUND ${currentRound}!`);
+
+      if (roundTransitionTimerRef.current) {
+        clearTimeout(roundTransitionTimerRef.current);
+      }
+      roundTransitionTimerRef.current = setTimeout(() => {
+        setRoundTransitionText(null);
+        roundTransitionTimerRef.current = null;
+      }, 2200);
+    } else if (currentRound < prevRoundNumberRef.current) {
+      prevRoundNumberRef.current = currentRound;
+    }
 
     if (mm.matchedPairs > prevMatchedPairsRef.current) {
       prevMatchedPairsRef.current = mm.matchedPairs;
       playMatch();
+    } else if (mm.matchedPairs < prevMatchedPairsRef.current) {
+      // A new round started: re-sync so the first match of the new round plays its sound
+      prevMatchedPairsRef.current = mm.matchedPairs;
     }
 
     if (room.status === 'completed' && prevStatusRef.current !== 'completed') {
@@ -130,9 +175,10 @@ export const MemoryMatchMultiplayerView: React.FC<
     setActionError(null);
     try {
       prevMatchedPairsRef.current = 0;
-      await startMemoryMatchMultiplayerGame(room.roomCode);
+      const startedRoom = await startMemoryMatchMultiplayerGame(room.roomCode);
+      syncRoom?.(startedRoom);
     } catch (err) {
-      setActionError(formatFirebaseError(err).formatted);
+      setActionError(getUserFriendlyMultiplayerError(err, 'start-game'));
     }
   };
 
@@ -160,13 +206,31 @@ export const MemoryMatchMultiplayerView: React.FC<
 
     try {
       const result = await selectMemoryMatchMultiplayerCard(room.roomCode, cardId);
+      syncRoom?.(result.room);
       if (result.turnOutcome === 'mismatch') {
         playMismatch();
       }
     } catch (err) {
-      setActionError(formatFirebaseError(err).formatted);
+      setActionError(getUserFriendlyMultiplayerError(err, 'game-action'));
     } finally {
       setIsSubmittingCard(false);
+    }
+  };
+
+  const handleStartNextRound = async () => {
+    if (!room || isSubmittingRematch) return;
+    setActionError(null);
+    setIsSubmittingRematch(true);
+    playClick();
+    try {
+      prevMatchedPairsRef.current = 0;
+      setIsCelebrationOpen(false);
+      const nextRoundRoom = await startMemoryMatchRematch(room.roomCode);
+      syncRoom?.(nextRoundRoom);
+    } catch (err) {
+      setActionError(getUserFriendlyMultiplayerError(err, 'rematch'));
+    } finally {
+      setIsSubmittingRematch(false);
     }
   };
 
@@ -193,8 +257,14 @@ export const MemoryMatchMultiplayerView: React.FC<
         isHost={isHost}
         isLoading={isLoading}
         isReconnecting={isReconnecting}
+        isSynchronizing={isSynchronizing}
+        isConnected={isConnected}
         error={actionError || error}
         preferredNickname={preferredNickname}
+        invitedRoomCode={invitedRoomCode}
+        invitationStatus={invitationStatus}
+        invitationRoomInfo={invitationRoomInfo}
+        onDismissInvitation={dismissInvitation}
         onCreateRoom={createRoom}
         onJoinRoom={joinRoom}
         onStartGame={handleStartGame}
@@ -234,20 +304,24 @@ export const MemoryMatchMultiplayerView: React.FC<
     .map((wUid) => room.players[wUid]?.nickname || 'Player')
     .join(' & ');
 
-  // Responsive grid layout for 20, 40, or 60 cards
+  // Responsive grid layout for 20, 40, 60, or 100 cards:
+  // - Desktop: 5x4 (20), 8x5 (40), 10x6 (60), 10x10 (100)
+  // - Mobile: 4-5 columns so cards remain large enough to tap comfortably and icons stay legible with vertical scrolling
   const gridClasses =
     totalCards <= 20
       ? 'grid-cols-4 sm:grid-cols-5 max-w-[380px] sm:max-w-[540px] gap-2 sm:gap-2.5'
       : totalCards <= 40
       ? 'grid-cols-5 sm:grid-cols-8 max-w-[440px] sm:max-w-[740px] gap-1.5 sm:gap-2'
-      : 'grid-cols-6 sm:grid-cols-10 max-w-[480px] sm:max-w-[880px] gap-1 sm:gap-1.5';
+      : totalCards <= 60
+      ? 'grid-cols-5 sm:grid-cols-10 max-w-[460px] sm:max-w-[880px] gap-1.5 sm:gap-1.5'
+      : 'grid-cols-5 sm:grid-cols-10 max-w-[460px] sm:max-w-[920px] gap-1.5 sm:gap-1.5';
 
   const iconSizeClass =
     totalCards <= 20
       ? 'w-7 h-7 sm:w-9 sm:h-9'
       : totalCards <= 40
       ? 'w-5 h-5 sm:w-7 sm:h-7'
-      : 'w-4 h-4 sm:w-6 sm:h-6';
+      : 'w-5 h-5 sm:w-6 sm:h-6';
 
   return (
     <div data-testid="memory-multiplayer-active">
@@ -273,6 +347,20 @@ export const MemoryMatchMultiplayerView: React.FC<
             <Layers className="w-3.5 h-3.5" />
             Pairs: {mm.matchedPairs} / {mm.totalPairs}
           </span>
+          <span
+            className="inline-flex items-center gap-1 text-[10px] font-['Press_Start_2P'] text-[#FFC66D]"
+            data-testid="mp-memory-round-indicator"
+          >
+            ROUND {mm.roundNumber ?? 1}
+          </span>
+          {(isSynchronizing || isConnected === false) && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FFC66D]/15 border border-[#FFC66D]/40 text-[#FFC66D] text-[10px] font-semibold animate-pulse"
+              data-testid="mp-memory-sync-indicator"
+            >
+              {isConnected === false ? 'Reconnecting...' : 'Syncing...'}
+            </span>
+          )}
         </div>
 
         {isHost ? (
@@ -315,13 +403,15 @@ export const MemoryMatchMultiplayerView: React.FC<
         </div>
       )}
 
-      {/* Multi-Player Shared Scoreboard (2–4 Players) */}
+      {/* Multi-Player Shared Scoreboard (2–8 Players) */}
       <div
-        className={`grid gap-2 sm:gap-3 max-w-3xl mx-auto mb-3 ${
+        className={`grid gap-2 sm:gap-2.5 max-w-4xl mx-auto mb-3 ${
           orderedPlayers.length === 2
             ? 'grid-cols-2'
             : orderedPlayers.length === 3
             ? 'grid-cols-3'
+            : orderedPlayers.length === 5 || orderedPlayers.length === 6
+            ? 'grid-cols-2 sm:grid-cols-3'
             : 'grid-cols-2 sm:grid-cols-4'
         }`}
         data-testid="mp-memory-scoreboard"
@@ -474,6 +564,19 @@ export const MemoryMatchMultiplayerView: React.FC<
         })}
       </div>
 
+      {/* New Round Transition Banner */}
+      {roundTransitionText && (
+        <div
+          className="max-w-xl mx-auto mb-3 py-2.5 px-4 rounded-xl bg-[#FFC66D]/20 border-2 border-[#FFC66D] text-[#FFC66D] text-center shadow-[0_0_20px_rgba(255,198,109,0.28)] animate-pulse"
+          role="status"
+          data-testid="mp-memory-round-transition"
+        >
+          <span className="font-['Press_Start_2P'] text-[10px] sm:text-xs uppercase tracking-wider">
+            {roundTransitionText}
+          </span>
+        </div>
+      )}
+
       {/* Turn & Match Status Banner */}
       <div className="max-w-xl mx-auto mb-4 text-center">
         {isGameOver ? (
@@ -541,7 +644,10 @@ export const MemoryMatchMultiplayerView: React.FC<
             mm.matchedByPairKey
           );
           const resolvedOwnerUid =
-            (card.isMatched && mm.matchedByPairKey?.[card.pairKey]) || card.matchedByUid;
+            (card.isMatched &&
+              (mm.matchedByPairKey?.[card.symbolId] ||
+                mm.matchedByPairKey?.[card.pairKey])) ||
+            card.matchedByUid;
           const matchedOwnerPlayer =
             card.isMatched && resolvedOwnerUid
               ? room.players[resolvedOwnerUid]
@@ -599,14 +705,6 @@ export const MemoryMatchMultiplayerView: React.FC<
                     color={card.color}
                     className={iconSizeClass}
                   />
-                  {card.badgeLabel && (
-                    <span
-                      className="absolute top-0.5 right-1 font-['Press_Start_2P'] text-[7px] sm:text-[8px] px-1 rounded bg-[#171329]/90"
-                      style={{ color: card.color }}
-                    >
-                      {card.badgeLabel}
-                    </span>
-                  )}
                   {card.isMatched && matchedOwnerColor && (
                     <span
                       className="absolute bottom-0.5 left-1 font-['Press_Start_2P'] text-[6px] sm:text-[7px] px-1 py-0.2 rounded leading-tight"
@@ -630,11 +728,51 @@ export const MemoryMatchMultiplayerView: React.FC<
         })}
       </div>
 
+      {/* Play Again / Next Round Panel */}
+      {isGameOver && (
+        <div
+          className="max-w-3xl mx-auto mt-4 p-3.5 sm:p-4 rounded-xl bg-[#201A36] border-2 border-[#FFC66D]/60"
+          data-testid="mp-memory-rematch-panel"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="font-['Press_Start_2P'] text-[10px] sm:text-xs text-[#FFC66D] mb-1.5">
+                ROUND {mm.roundNumber ?? 1} COMPLETE
+              </h3>
+              <p className="text-xs text-[#FFF0D7]/75" data-testid="mp-memory-rematch-status">
+                {isHost
+                  ? `Click Play Again to immediately deal a fresh shuffled board for Round ${(mm.roundNumber ?? 1) + 1}!`
+                  : `Waiting for the host to start Round ${(mm.roundNumber ?? 1) + 1}...`}
+              </p>
+            </div>
+
+            {isHost && (
+              <div className="flex flex-col sm:items-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void handleStartNextRound()}
+                  disabled={isSubmittingRematch}
+                  className="px-5 py-3 rounded-xl font-['Press_Start_2P'] text-xs uppercase tracking-wider bg-[#FF776E] hover:bg-[#ff8d85] text-[#171329] shadow-[0_0_20px_rgba(255,119,110,0.4)] transition-all cursor-pointer disabled:opacity-60"
+                  data-testid="mp-memory-play-again-btn"
+                >
+                  Play Again
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Victory Celebration Modal */}
       <VictoryCelebrationModal
         isOpen={isCelebrationOpen && isGameOver}
         onClose={() => setIsCelebrationOpen(false)}
-        onPlayAgain={() => setIsCelebrationOpen(false)}
+        onPlayAgain={() => {
+          setIsCelebrationOpen(false);
+          if (isHost) {
+            void handleStartNextRound();
+          }
+        }}
         onBackToArcade={() => {
           setIsCelebrationOpen(false);
           onBackToHome();
@@ -650,12 +788,10 @@ export const MemoryMatchMultiplayerView: React.FC<
             ? `${winnerNicknames} tied with the highest score on the ${totalCards}-card board!`
             : `${winnerNicknames} found the most pairs on the ${totalCards}-card board!`
         }
-        stats={orderedPlayers.map((p, i) => ({
+        stats={orderedPlayers.map((p) => ({
           label: p.nickname.toUpperCase(),
           value: `${p.score} ${p.score === 1 ? 'PAIR' : 'PAIRS'}`,
-          accent:
-            getMemoryPlayerColor(p.uid, mm.turnOrderUids)?.hex ??
-            (i === 0 ? '#3B82F6' : i === 1 ? '#EF4444' : i === 2 ? '#22C55E' : '#A855F7'),
+          accent: getMemoryPlayerColor(p.uid, mm.turnOrderUids)?.hex ?? '#3B82F6',
         }))}
       />
     </div>
