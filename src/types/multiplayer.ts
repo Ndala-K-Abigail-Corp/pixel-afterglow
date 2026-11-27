@@ -49,71 +49,161 @@ export const ROOM_EXPIRY_POLICIES_MS = {
 export type MemoryMultiplayerPlayerCount = 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 /**
- * Board configuration per player count for Multiplayer Memory Match:
- * - 2 players -> 20 cards (10 pairs), min 2 players to start
- * - 3 players -> 40 cards (20 pairs), min 3 players to start
- * - 4 players -> 60 cards (30 pairs), min 3 players to start
- * - 5 players -> 100 cards (50 pairs), min 3 players to start
- * - 6 players -> 100 cards (50 pairs), min 3 players to start
- * - 7 players -> 100 cards (50 pairs), min 3 players to start
- * - 8 players -> 100 cards (50 pairs), min 3 players to start
+ * Flexible Memory Match board & player limits.
+ * Board size is fully independent of the number of players:
+ * - Card count: 10–100 in steps of 2 (always even, pairs = cardCount / 2)
+ * - Player limits: minimum 2–8, maximum 2–8, minimum <= maximum
  */
-export interface MemoryMultiplayerBoardConfig {
-  maxPlayers: MemoryMultiplayerPlayerCount;
-  minPlayersToStart: 2 | 3;
-  totalCards: 20 | 40 | 60 | 100;
-  matchingPairs: 10 | 20 | 30 | 50;
+export const MEMORY_MIN_CARD_COUNT = 10;
+export const MEMORY_MAX_CARD_COUNT = 100;
+export const MEMORY_CARD_COUNT_STEP = 2;
+export const MEMORY_MIN_PLAYER_LIMIT = 2;
+export const MEMORY_MAX_PLAYER_LIMIT = 8;
+/** Boards at or above this size show the "Large game board" recommendation notice. */
+export const MEMORY_LARGE_BOARD_THRESHOLD = 60;
+
+/**
+ * Persistent host-controlled Memory Match room settings (stored as `memoryRoomSettings`).
+ * These describe the NEXT match. They are editable by the host only while the room is
+ * `waiting` or `completed`, and are locked while a match is `in_progress`.
+ */
+export interface MemoryRoomSettings {
+  cardCount: number;
+  minPlayers: number;
+  maxPlayers: number;
 }
 
-export const MEMORY_MULTIPLAYER_CONFIGS: Readonly<
-  Record<MemoryMultiplayerPlayerCount, MemoryMultiplayerBoardConfig>
-> = {
-  2: { maxPlayers: 2, minPlayersToStart: 2, totalCards: 20, matchingPairs: 10 },
-  3: { maxPlayers: 3, minPlayersToStart: 3, totalCards: 40, matchingPairs: 20 },
-  4: { maxPlayers: 4, minPlayersToStart: 3, totalCards: 60, matchingPairs: 30 },
-  5: { maxPlayers: 5, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
-  6: { maxPlayers: 6, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
-  7: { maxPlayers: 7, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
-  8: { maxPlayers: 8, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
+export const DEFAULT_MEMORY_ROOM_SETTINGS: Readonly<MemoryRoomSettings> = {
+  cardCount: 20,
+  minPlayers: 2,
+  maxPlayers: 8,
 };
 
 /**
- * Selectable room-capacity presets shown in the Memory Match room creation UI:
- * - 2P -> maxPlayers: 2, minPlayersToStart: 2, 20 cards (10 pairs)
- * - 3P -> maxPlayers: 3, minPlayersToStart: 3, 40 cards (20 pairs)
- * - 4P -> maxPlayers: 4, minPlayersToStart: 3, 60 cards (30 pairs)
- * - 5–8P -> maxPlayers: 8, minPlayersToStart: 3, 100 cards (50 pairs)
+ * Authoritative per-game player limits (automatically enforced by app logic & Firestore Rules).
+ * Room creation does not ask the host to pick min/max player counts.
  */
-export type MemorySelectableRoomCapacity = 2 | 3 | 4 | 8;
+export const GAME_PLAYER_LIMITS: Readonly<
+  Record<MultiplayerGameType, { minPlayers: number; maxPlayers: number }>
+> = {
+  'tic-tac-toe': { minPlayers: 2, maxPlayers: 2 },
+  'memory-match': { minPlayers: 2, maxPlayers: 8 },
+};
 
-export interface MemoryRoomCapacityOption {
-  label: '2P' | '3P' | '4P' | '5–8P';
-  maxPlayers: MemorySelectableRoomCapacity;
-  minPlayersToStart: 2 | 3;
-  totalCards: 20 | 40 | 60 | 100;
-  matchingPairs: 10 | 20 | 30 | 50;
+/** Every selectable card count: 10, 12, 14 … 98, 100. */
+export const MEMORY_VALID_CARD_COUNTS: ReadonlyArray<number> = Array.from(
+  { length: (MEMORY_MAX_CARD_COUNT - MEMORY_MIN_CARD_COUNT) / MEMORY_CARD_COUNT_STEP + 1 },
+  (_, i) => MEMORY_MIN_CARD_COUNT + i * MEMORY_CARD_COUNT_STEP
+);
+
+export function isValidMemoryCardCount(cardCount: unknown): cardCount is number {
+  return (
+    typeof cardCount === 'number' &&
+    Number.isInteger(cardCount) &&
+    cardCount >= MEMORY_MIN_CARD_COUNT &&
+    cardCount <= MEMORY_MAX_CARD_COUNT &&
+    cardCount % MEMORY_CARD_COUNT_STEP === 0
+  );
 }
 
-export const MEMORY_ROOM_CAPACITY_OPTIONS: ReadonlyArray<MemoryRoomCapacityOption> = [
-  { label: '2P', maxPlayers: 2, minPlayersToStart: 2, totalCards: 20, matchingPairs: 10 },
-  { label: '3P', maxPlayers: 3, minPlayersToStart: 3, totalCards: 40, matchingPairs: 20 },
-  { label: '4P', maxPlayers: 4, minPlayersToStart: 3, totalCards: 60, matchingPairs: 30 },
-  { label: '5–8P', maxPlayers: 8, minPlayersToStart: 3, totalCards: 100, matchingPairs: 50 },
-] as const;
+export function isValidMemoryPlayerLimit(limit: unknown): limit is number {
+  return (
+    typeof limit === 'number' &&
+    Number.isInteger(limit) &&
+    limit >= MEMORY_MIN_PLAYER_LIMIT &&
+    limit <= MEMORY_MAX_PLAYER_LIMIT
+  );
+}
 
 /**
- * Returns the minimum number of joined players required for the host to start the game:
- * - Capacity 2 (or Tic-Tac-Toe) -> minimum 2 players
- * - Capacity 3, 4, 5, 6, 7, or 8 -> minimum 3 players
+ * Pure structural validation of a settings object (independent of current room membership).
  */
-export function getMinimumPlayersToStart(
-  maxPlayers: number,
-  gameType: MultiplayerGameType = 'memory-match'
-): 2 | 3 {
-  if (gameType === 'tic-tac-toe' || maxPlayers <= 2) {
+export function isValidMemoryRoomSettings(
+  settings: Partial<MemoryRoomSettings> | null | undefined
+): settings is MemoryRoomSettings {
+  return Boolean(
+    settings &&
+      isValidMemoryCardCount(settings.cardCount) &&
+      isValidMemoryPlayerLimit(settings.minPlayers) &&
+      isValidMemoryPlayerLimit(settings.maxPlayers) &&
+      (settings.minPlayers as number) <= (settings.maxPlayers as number)
+  );
+}
+
+/** Number of unique symbol pairs for a card count (always cardCount / 2). */
+export function getMemoryPairCount(cardCount: number): number {
+  return cardCount / 2;
+}
+
+export function isLargeMemoryBoard(cardCount: number): boolean {
+  return cardCount >= MEMORY_LARGE_BOARD_THRESHOLD;
+}
+
+const LARGE_BOARD_ACK_STORAGE_KEY = 'pixel-afterglow:large-board-notice-ack';
+
+export function isLargeBoardNoticeAcknowledged(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.sessionStorage.getItem(LARGE_BOARD_ACK_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function acknowledgeLargeBoardNotice(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(LARGE_BOARD_ACK_STORAGE_KEY, '1');
+  } catch {
+    // ignore storage errors in restricted environments
+  }
+}
+
+export function resetLargeBoardNoticeAcknowledgement(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(LARGE_BOARD_ACK_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Resolves the persistent Memory Match settings for a room, falling back to defaults
+ * synchronised with the room's `maxPlayers` capacity for legacy rooms without settings.
+ */
+export function getRoomMemorySettings(
+  room: Pick<MultiplayerRoomDocument, 'maxPlayers'> & {
+    memoryRoomSettings?: MemoryRoomSettings | null;
+  }
+): MemoryRoomSettings {
+  if (room.memoryRoomSettings && isValidMemoryRoomSettings(room.memoryRoomSettings)) {
+    return { ...room.memoryRoomSettings };
+  }
+  const maxPlayers = isValidMemoryPlayerLimit(room.maxPlayers)
+    ? room.maxPlayers
+    : DEFAULT_MEMORY_ROOM_SETTINGS.maxPlayers;
+  return {
+    cardCount: DEFAULT_MEMORY_ROOM_SETTINGS.cardCount,
+    minPlayers: Math.min(DEFAULT_MEMORY_ROOM_SETTINGS.minPlayers, maxPlayers),
+    maxPlayers,
+  };
+}
+
+/**
+ * Returns the minimum number of joined players required for the host to start a match.
+ * - Tic-Tac-Toe -> always 2
+ * - Memory Match -> the host-configured `memoryRoomSettings.minPlayers` (default 2)
+ */
+export function getRoomMinimumPlayers(
+  room: Pick<MultiplayerRoomDocument, 'gameType' | 'maxPlayers'> & {
+    memoryRoomSettings?: MemoryRoomSettings | null;
+  }
+): number {
+  if (room.gameType === 'tic-tac-toe') {
     return 2;
   }
-  return 3;
+  return getRoomMemorySettings(room).minPlayers;
 }
 
 /**
@@ -198,7 +288,98 @@ export interface MemoryMatchMultiplayerState {
   /** UID(s) of the winning player(s) when all pairs are matched (>1 UID indicates a tie) */
   winnerUids: string[];
   isTie: boolean;
+  /**
+   * Immutable snapshot of the settings this match was dealt with. Kept separate from the
+   * room's persistent `memoryRoomSettings` so editing the NEXT match never alters this one.
+   */
+  matchSettings?: MemoryRoomSettings;
+  /** Monotonic turn counter within the current round (prevents duplicate skips / stale moves) */
+  turnSequence?: number;
+  /** Epoch ms when the current turn started (used to determine skip-turn eligibility) */
+  turnStartedAt?: number;
+  /** Details of the most recently skipped turn so all players see a clear notification */
+  lastSkippedTurn?: SkippedTurnInfo | null;
 }
+
+/**
+ * Metadata recorded when an inactive player's turn is skipped.
+ */
+export interface SkippedTurnInfo {
+  skippedUid: string;
+  skippedNickname: string;
+  skippedByUid: string;
+  skippedByNickname: string;
+  roundNumber: number;
+  turnSequence: number;
+  skippedAt: number;
+}
+
+/** Inactivity duration (ms) before a connected turn player becomes eligible to be skipped. */
+export const SKIP_TURN_INACTIVITY_MS = 30_000;
+
+/**
+ * Real-time player reactions & room chat types (stored in Firestore subcollections).
+ */
+export const ALLOWED_REACTION_EMOJIS = [
+  '😂',
+  '👏',
+  '🔥',
+  '😮',
+  '😭',
+  '🎉',
+  '❤️',
+  '😎',
+  '😡',
+] as const;
+
+export type ReactionEmoji = (typeof ALLOWED_REACTION_EMOJIS)[number];
+
+export interface ArcadeReactionMeta {
+  emoji: ReactionEmoji;
+  label: string;
+  accentHex: string;
+  glowRgba: string;
+}
+
+export const ARCADE_REACTION_CATALOG: ReadonlyArray<ArcadeReactionMeta> = [
+  { emoji: '😂', label: 'Laugh', accentHex: '#FFC66D', glowRgba: 'rgba(255, 198, 109, 0.45)' },
+  { emoji: '👏', label: 'Clap', accentHex: '#56E0CB', glowRgba: 'rgba(86, 224, 203, 0.45)' },
+  { emoji: '🔥', label: 'Fire', accentHex: '#F97316', glowRgba: 'rgba(249, 115, 22, 0.48)' },
+  { emoji: '😮', label: 'Shock', accentHex: '#38BDF8', glowRgba: 'rgba(56, 189, 248, 0.45)' },
+  { emoji: '😭', label: 'Cry', accentHex: '#60A5FA', glowRgba: 'rgba(96, 165, 250, 0.45)' },
+  { emoji: '🎉', label: 'Party', accentHex: '#A855F7', glowRgba: 'rgba(168, 85, 247, 0.48)' },
+  { emoji: '❤️', label: 'Love', accentHex: '#FF776E', glowRgba: 'rgba(255, 119, 110, 0.48)' },
+  { emoji: '😎', label: 'Cool', accentHex: '#22C55E', glowRgba: 'rgba(34, 197, 94, 0.45)' },
+  { emoji: '😡', label: 'Angry', accentHex: '#EF4444', glowRgba: 'rgba(239, 68, 68, 0.5)' },
+];
+
+export type RoomConnectionState =
+  | 'connecting'
+  | 'reconnecting'
+  | 'connected'
+  | 'disconnected';
+
+export interface RoomReaction {
+  id: string;
+  roomCode: string;
+  uid: string;
+  nickname: string;
+  emoji: ReactionEmoji;
+  createdAt: number;
+}
+
+export interface RoomChatMessage {
+  id: string;
+  roomCode: string;
+  uid: string;
+  nickname: string;
+  text: string;
+  createdAt: number;
+}
+
+export const CHAT_MESSAGE_MAX_LENGTH = 200;
+export const REACTION_COOLDOWN_MS = 1500;
+export const CHAT_COOLDOWN_MS = 1200;
 
 /**
  * Shared Firestore document structure for a room in `rooms/{roomCode}`.
@@ -224,6 +405,11 @@ export interface MultiplayerRoomDocument {
   /** Game-specific state payloads */
   ticTacToeState: TicTacToeMultiplayerState | null;
   memoryMatchState: MemoryMatchMultiplayerState | null;
+  /**
+   * Persistent host-controlled Memory Match settings used for the NEXT match
+   * (null for Tic-Tac-Toe). `maxPlayers` above always mirrors `memoryRoomSettings.maxPlayers`.
+   */
+  memoryRoomSettings?: MemoryRoomSettings | null;
 }
 
 /**

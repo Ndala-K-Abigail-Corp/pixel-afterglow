@@ -10,8 +10,13 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import {
   buildInitialRoomDocument,
   applyPlayerJoinOrReconnect,
+  applyUpdateMemoryRoomSettings,
+  shouldAcceptIncomingRoomState,
 } from './multiplayerRoom';
-import { MemoryMatchBoardStateSchema } from '../schemas/multiplayerSchemas';
+import {
+  MemoryMatchBoardStateSchema,
+  MemoryRoomSettingsSchema,
+} from '../schemas/multiplayerSchemas';
 import {
   createMultiplayerMemoryDeck,
   applyStartMemoryMatchGame,
@@ -25,15 +30,31 @@ import {
   getMatchedCardOwnerColor,
 } from './memoryMatchMultiplayer';
 import { MemorySymbolIcon } from '../components/game/MemorySymbolIcon';
-import type {
-  MemoryMultiplayerPlayerCount,
-  MultiplayerRoomDocument,
+import {
+  MEMORY_VALID_CARD_COUNTS,
+  resetLargeBoardNoticeAcknowledgement,
+  type MemoryMultiplayerPlayerCount,
+  type MultiplayerRoomDocument,
 } from '../types/multiplayer';
 
 const mockUseMultiplayerRoom = vi.fn();
 
 vi.mock('../hooks/useMultiplayerRoom', () => ({
   useMultiplayerRoom: (...args: unknown[]) => mockUseMultiplayerRoom(...args),
+}));
+
+vi.mock('../hooks/useRoomSocial', () => ({
+  useRoomSocial: () => ({
+    activeReactions: [],
+    messages: [],
+    isLoadingChat: false,
+    isSendingMessage: false,
+    socialError: null,
+    clearSocialError: vi.fn(),
+    sendReaction: vi.fn(),
+    sendMessage: vi.fn().mockResolvedValue(true),
+    deleteMessage: vi.fn(),
+  }),
 }));
 
 vi.mock('../context/AudioContext', () => ({
@@ -59,13 +80,16 @@ import { MULTIPLAYER_USER_MESSAGES } from '../utils/multiplayerErrors';
 describe('Phase 4 – Multiplayer Memory Match Logic', () => {
   const BASE_NOW = 1_700_000_000_000;
 
-  function createReadyMemoryRoom(playerCount: MemoryMultiplayerPlayerCount) {
+  function createReadyMemoryRoom(
+    playerCount: MemoryMultiplayerPlayerCount,
+    cardCount: number = playerCount <= 2 ? 20 : playerCount === 3 ? 40 : playerCount === 4 ? 60 : 100
+  ) {
     let room = buildInitialRoomDocument({
       roomCode: 'MEM123',
       gameType: 'memory-match',
       hostUid: 'p1',
       hostNickname: 'Player1',
-      maxPlayers: playerCount,
+      memorySettings: { cardCount, minPlayers: 2, maxPlayers: playerCount },
       nowMs: BASE_NOW,
     });
 
@@ -80,19 +104,13 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
     return room;
   }
 
-  it.each([
-    { playerCount: 2 as const, expectedCards: 20, expectedPairs: 10 },
-    { playerCount: 3 as const, expectedCards: 40, expectedPairs: 20 },
-    { playerCount: 4 as const, expectedCards: 60, expectedPairs: 30 },
-    { playerCount: 5 as const, expectedCards: 100, expectedPairs: 50 },
-    { playerCount: 6 as const, expectedCards: 100, expectedPairs: 50 },
-    { playerCount: 7 as const, expectedCards: 100, expectedPairs: 50 },
-    { playerCount: 8 as const, expectedCards: 100, expectedPairs: 50 },
-  ])(
-    'creates $expectedCards cards ($expectedPairs unique symbol pairs) for $playerCount players with no duplicate symbolIds or Roman numeral badges',
-    ({ playerCount, expectedCards, expectedPairs }) => {
-      const deck = createMultiplayerMemoryDeck(playerCount);
-      expect(deck).toHaveLength(expectedCards);
+  it('creates valid decks for every even card count from 10 to 100 and rejects odd or out-of-range counts', () => {
+    expect(MEMORY_VALID_CARD_COUNTS).toHaveLength(46);
+
+    for (const cardCount of MEMORY_VALID_CARD_COUNTS) {
+      const expectedPairs = cardCount / 2;
+      const deck = createMultiplayerMemoryDeck(cardCount);
+      expect(deck).toHaveLength(cardCount);
 
       const symbolCounts = new Map<string, number>();
       const cardIds = new Set<number>();
@@ -106,13 +124,18 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
       }
 
       // Every card has a unique cardId (0..N-1) and every symbolId appears on exactly 2 cards
-      expect(cardIds.size).toBe(expectedCards);
+      expect(cardIds.size).toBe(cardCount);
       expect(symbolCounts.size).toBe(expectedPairs);
       for (const count of symbolCounts.values()) {
         expect(count).toBe(2);
       }
     }
-  );
+
+    // Reject odd counts, < 10, > 100, and non-integers
+    for (const invalidCount of [-4, 0, 8, 9, 11, 15, 51, 99, 101, 102, 20.5]) {
+      expect(() => createMultiplayerMemoryDeck(invalidCount)).toThrow(/even integer between 10 and 100/i);
+    }
+  });
 
   it('provides 50 genuinely distinct pixel-art symbols where every symbolId renders a unique SVG icon', () => {
     expect(MULTIPLAYER_MEMORY_SYMBOLS).toHaveLength(50);
@@ -159,38 +182,26 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
   });
 
   it.each([
-    // 2-player capacity: rejected at 1, permitted at 2 (20 cards / 10 pairs)
-    { capacity: 2 as const, joined: 1, canStart: false, expectedCards: 0, expectedPairs: 0 },
-    { capacity: 2 as const, joined: 2, canStart: true, expectedCards: 20, expectedPairs: 10 },
-    // 3-player capacity: rejected at 2, permitted at 3 (40 cards / 20 pairs)
-    { capacity: 3 as const, joined: 2, canStart: false, expectedCards: 0, expectedPairs: 0 },
-    { capacity: 3 as const, joined: 3, canStart: true, expectedCards: 40, expectedPairs: 20 },
-    // 4-player capacity: rejected at 2, permitted at 3 (40 cards) and 4 (60 cards)
-    { capacity: 4 as const, joined: 2, canStart: false, expectedCards: 0, expectedPairs: 0 },
-    { capacity: 4 as const, joined: 3, canStart: true, expectedCards: 40, expectedPairs: 20 },
-    { capacity: 4 as const, joined: 4, canStart: true, expectedCards: 60, expectedPairs: 30 },
-    // 5-player capacity: permitted at 3 (40 cards), 4 (60 cards), and 5 (100 cards)
-    { capacity: 5 as const, joined: 2, canStart: false, expectedCards: 0, expectedPairs: 0 },
-    { capacity: 5 as const, joined: 3, canStart: true, expectedCards: 40, expectedPairs: 20 },
-    { capacity: 5 as const, joined: 4, canStart: true, expectedCards: 60, expectedPairs: 30 },
-    { capacity: 5 as const, joined: 5, canStart: true, expectedCards: 100, expectedPairs: 50 },
-    // 8-player capacity: rejected at 2, permitted at 3, 4, 5, 6, 7, and 8
-    { capacity: 8 as const, joined: 2, canStart: false, expectedCards: 0, expectedPairs: 0 },
-    { capacity: 8 as const, joined: 3, canStart: true, expectedCards: 40, expectedPairs: 20 },
-    { capacity: 8 as const, joined: 4, canStart: true, expectedCards: 60, expectedPairs: 30 },
-    { capacity: 8 as const, joined: 5, canStart: true, expectedCards: 100, expectedPairs: 50 },
-    { capacity: 8 as const, joined: 6, canStart: true, expectedCards: 100, expectedPairs: 50 },
-    { capacity: 8 as const, joined: 7, canStart: true, expectedCards: 100, expectedPairs: 50 },
-    { capacity: 8 as const, joined: 8, canStart: true, expectedCards: 100, expectedPairs: 50 },
+    // Two players can play a 100-card game (board size completely independent of player count)
+    { cardCount: 100, minPlayers: 2, maxPlayers: 2, joined: 2, canStart: true },
+    { cardCount: 100, minPlayers: 2, maxPlayers: 8, joined: 2, canStart: true },
+    // Eight players can play a 10-card game
+    { cardCount: 10, minPlayers: 2, maxPlayers: 8, joined: 8, canStart: true },
+    // Host-configured minimum players enforced accurately
+    { cardCount: 40, minPlayers: 3, maxPlayers: 8, joined: 2, canStart: false },
+    { cardCount: 40, minPlayers: 3, maxPlayers: 8, joined: 3, canStart: true },
+    { cardCount: 64, minPlayers: 4, maxPlayers: 6, joined: 3, canStart: false },
+    { cardCount: 64, minPlayers: 4, maxPlayers: 6, joined: 4, canStart: true },
+    { cardCount: 20, minPlayers: 2, maxPlayers: 4, joined: 1, canStart: false },
   ])(
-    'enforces flexible minimum player requirements (capacity $capacity, joined $joined -> canStart: $canStart) and generates board for actual participating players',
-    ({ capacity, joined, canStart, expectedCards, expectedPairs }) => {
+    'decouples card count ($cardCount) from player limits (min $minPlayers, max $maxPlayers, joined $joined -> canStart: $canStart)',
+    ({ cardCount, minPlayers, maxPlayers, joined, canStart }) => {
       let room = buildInitialRoomDocument({
         roomCode: 'FLX123',
         gameType: 'memory-match',
         hostUid: 'p1',
         hostNickname: 'Player1',
-        maxPlayers: capacity,
+        memorySettings: { cardCount, minPlayers, maxPlayers },
         nowMs: BASE_NOW,
       });
 
@@ -221,14 +232,17 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
         randomFn: () => 0.5,
       });
 
-      // Preserves original room capacity, locks membership, and uses only actual joined players
       expect(started.status).toBe('in_progress');
-      expect(started.maxPlayers).toBe(capacity);
+      expect(started.maxPlayers).toBe(maxPlayers);
       expect(started.playerOrder).toHaveLength(joined);
-      expect(Object.keys(started.players)).toHaveLength(joined);
       expect(started.memoryMatchState?.turnOrderUids).toEqual(started.playerOrder);
-      expect(started.memoryMatchState?.cards).toHaveLength(expectedCards);
-      expect(started.memoryMatchState?.totalPairs).toBe(expectedPairs);
+      expect(started.memoryMatchState?.cards).toHaveLength(cardCount);
+      expect(started.memoryMatchState?.totalPairs).toBe(cardCount / 2);
+      expect(started.memoryMatchState?.matchSettings).toEqual({
+        cardCount,
+        minPlayers,
+        maxPlayers,
+      });
       expect(started.currentTurnUid).toBe('p1');
 
       // New players cannot join once the game starts even if capacity had open slots
@@ -243,14 +257,14 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
     }
   );
 
-  it('displays waiting room readiness status, minimum requirement, and enables Start Match when 3 of 8 players have joined', () => {
+  it('displays waiting room readiness status, host-editable settings, and enables Start Match once configured minimum is reached', () => {
     const liveNow = Date.now();
     let room = buildInitialRoomDocument({
       roomCode: 'WTR888',
       gameType: 'memory-match',
       hostUid: 'p1',
       hostNickname: 'Player1',
-      maxPlayers: 8,
+      memorySettings: { cardCount: 40, minPlayers: 3, maxPlayers: 8 },
       nowMs: liveNow,
     });
     room = applyPlayerJoinOrReconnect({
@@ -260,7 +274,7 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
       nowMs: liveNow + 100,
     });
 
-    // 1. With 2 of 8 joined (< minimum 3), Start Match is disabled and waiting message is shown
+    // 1. With 2 of 8 joined (< configured minimum 3), Start Match is disabled and waiting message is shown
     mockUseMultiplayerRoom.mockReturnValue({
       room,
       uid: 'p1',
@@ -271,6 +285,7 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
       preferredNickname: 'Player1',
       createRoom: vi.fn(),
       joinRoom: vi.fn(),
+      updateRoomSettings: vi.fn(),
       leaveRoom: vi.fn(),
       closeRoom: vi.fn(),
       clearError: vi.fn(),
@@ -291,9 +306,12 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
     expect(
       (screen.getByTestId('host-start-game-btn') as HTMLButtonElement).disabled
     ).toBe(true);
+    expect(
+      screen.getByTestId('memory-room-settings-panel').getAttribute('data-editable')
+    ).toBe('true');
     view2Of8.unmount();
 
-    // 2. When 3rd player joins (3 of 8), Start Match becomes enabled and shows "3 of 8 players joined – Ready to start!"
+    // 2. When 3rd player joins (3 of 8), Start Match becomes enabled and guests see read-only settings
     const room3Of8 = applyPlayerJoinOrReconnect({
       room,
       uid: 'p3',
@@ -310,6 +328,7 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
       preferredNickname: 'Player1',
       createRoom: vi.fn(),
       joinRoom: vi.fn(),
+      updateRoomSettings: vi.fn(),
       leaveRoom: vi.fn(),
       closeRoom: vi.fn(),
       clearError: vi.fn(),
@@ -325,6 +344,31 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
     expect(startBtn.disabled).toBe(false);
     expect(startBtn.textContent).toContain('Start Match');
     view3Of8.unmount();
+
+    // 3. Guest sees read-only settings synced in real time
+    mockUseMultiplayerRoom.mockReturnValue({
+      room: room3Of8,
+      uid: 'p2',
+      isHost: false,
+      isLoading: false,
+      isReconnecting: false,
+      error: null,
+      preferredNickname: 'Player2',
+      createRoom: vi.fn(),
+      joinRoom: vi.fn(),
+      updateRoomSettings: vi.fn(),
+      leaveRoom: vi.fn(),
+      closeRoom: vi.fn(),
+      clearError: vi.fn(),
+    });
+    const guestView = render(
+      React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
+    );
+    expect(
+      screen.getByTestId('memory-room-settings-panel').getAttribute('data-editable')
+    ).toBe('false');
+    expect(screen.getByTestId('settings-card-count-display').textContent).toContain('40 Cards');
+    guestView.unmount();
   });
 
   it('awards +1 point and an extra turn on a match, and passes turn after mismatch reveal', () => {
@@ -810,14 +854,15 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
 
   function readyRoom(
     playerCount: MemoryMultiplayerPlayerCount,
-    baseNow = NOW
+    baseNow = NOW,
+    cardCount: number = playerCount <= 2 ? 20 : playerCount === 3 ? 40 : playerCount === 4 ? 60 : 100
   ): MultiplayerRoomDocument {
     let room = buildInitialRoomDocument({
       roomCode: 'RND123',
       gameType: 'memory-match',
       hostUid: 'p1',
       hostNickname: 'Player1',
-      maxPlayers: playerCount,
+      memorySettings: { cardCount, minPlayers: 2, maxPlayers: playerCount },
       nowMs: baseNow,
     });
     for (let i = 2; i <= playerCount; i++) {
@@ -1021,7 +1066,7 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
       nowMs: NOW + 20,
     });
 
-    // Start Round 1 with 3 of 8 players -> 40 cards (20 pairs), maxPlayers remains 8
+    // Start Round 1 with 3 of 8 players using default 20-card settings
     let round1 = applyStartMemoryMatchGame({
       room: waiting8Cap,
       callerUid: 'p1',
@@ -1030,28 +1075,73 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
     });
     expect(round1.maxPlayers).toBe(8);
     expect(round1.playerOrder).toEqual(['p1', 'p2', 'p3']);
-    expect(round1.memoryMatchState!.cards).toHaveLength(40);
-    expect(round1.memoryMatchState!.totalPairs).toBe(20);
+    expect(round1.memoryMatchState!.cards).toHaveLength(20);
+    expect(round1.memoryMatchState!.totalPairs).toBe(10);
+
+    // Host CANNOT edit settings while match is in progress
+    expect(() =>
+      applyUpdateMemoryRoomSettings({
+        room: round1,
+        callerUid: 'p1',
+        settings: { cardCount: 60, minPlayers: 2, maxPlayers: 8 },
+        nowMs: NOW + 200,
+      })
+    ).toThrow(/locked while a match is in progress/i);
 
     round1 = playRoundToCompletion(round1, NOW + 500);
     expect(round1.status).toBe('completed');
 
-    // Host immediately starts Round 2 without waiting for guest votes -> keeps maxPlayers = 8, generates 40 cards (20 pairs)
-    const round2 = applyStartMemoryMatchRematch({
+    // Non-host CANNOT edit settings after completion
+    expect(() =>
+      applyUpdateMemoryRoomSettings({
+        room: round1,
+        callerUid: 'p2',
+        settings: { cardCount: 60, minPlayers: 2, maxPlayers: 8 },
+        nowMs: NOW + 5050,
+      })
+    ).toThrow(/Only the room host/i);
+
+    // Host updates next-round settings to 60 cards (30 pairs) without altering Round 1's completed state
+    const updatedAfterRound1 = applyUpdateMemoryRoomSettings({
       room: round1,
+      callerUid: 'p1',
+      settings: { cardCount: 60, minPlayers: 2, maxPlayers: 8 },
+      nowMs: NOW + 5080,
+    });
+    expect(updatedAfterRound1.memoryMatchState!.cards).toHaveLength(20);
+    expect(updatedAfterRound1.memoryRoomSettings).toEqual({
+      cardCount: 60,
+      minPlayers: 2,
+      maxPlayers: 8,
+    });
+    // Connected clients accept the live settings update snapshot without refreshing
+    expect(shouldAcceptIncomingRoomState(round1, updatedAfterRound1)).toBe(true);
+
+    // Host starts Round 2 -> deals 60 cards (30 pairs) using latest saved settings while keeping room/players intact
+    const round2 = applyStartMemoryMatchRematch({
+      room: updatedAfterRound1,
       callerUid: 'p1',
       nowMs: NOW + 5100,
       randomFn: () => 0.2,
     });
     expect(round2.status).toBe('in_progress');
+    expect(round2.roomCode).toBe(round1.roomCode);
     expect(round2.maxPlayers).toBe(8);
     expect(round2.playerOrder).toEqual(['p1', 'p2', 'p3']);
     expect(round2.memoryMatchState!.roundNumber).toBe(2);
-    expect(round2.memoryMatchState!.cards).toHaveLength(40);
-    expect(round2.memoryMatchState!.totalPairs).toBe(20);
+    expect(round2.memoryMatchState!.cards).toHaveLength(60);
+    expect(round2.memoryMatchState!.totalPairs).toBe(30);
+    expect(round2.memoryMatchState!.matchSettings).toEqual({
+      cardCount: 60,
+      minPlayers: 2,
+      maxPlayers: 8,
+    });
+    // Stale Round 1 snapshot cannot overwrite Round 2
+    expect(shouldAcceptIncomingRoomState(round2, round1)).toBe(false);
   });
 
-  it('renders exactly 4 room-capacity selection options (2P, 3P, 4P, 5–8P) in lobby creation and passes maxPlayers = 8 for 5–8P', async () => {
+  it('renders flexible card-count & player-limit settings in lobby creation, displays dismissible Large Game Board notice at >= 60 cards, and submits independent settings', async () => {
+    resetLargeBoardNoticeAcknowledgement();
     const mockCreateRoom = vi.fn().mockResolvedValue(null);
     mockUseMultiplayerRoom.mockReturnValue({
       room: null,
@@ -1063,6 +1153,7 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
       preferredNickname: 'HostHero',
       createRoom: mockCreateRoom,
       joinRoom: vi.fn(),
+      updateRoomSettings: vi.fn(),
       leaveRoom: vi.fn(),
       closeRoom: vi.fn(),
       clearError: vi.fn(),
@@ -1072,49 +1163,50 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
       React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
     );
 
-    const optionsContainer = screen.getByTestId('memory-capacity-options');
-    const optionButtons = optionsContainer.querySelectorAll('button');
-    expect(optionButtons).toHaveLength(4);
+    // Default settings: 20 cards (10 pairs), 2–8 Players (Auto) — player-limit selectors are hidden
+    expect(screen.getByTestId('settings-card-count-display').textContent).toContain('20 Cards');
+    expect(screen.getByTestId('settings-pair-count-display').textContent).toContain('10 Pairs');
+    expect(screen.getByTestId('settings-player-limits-display').textContent).toContain(
+      '2–8 Players (Auto)'
+    );
+    expect(screen.queryByTestId('settings-min-players-select')).toBeNull();
+    expect(screen.queryByTestId('settings-max-players-select')).toBeNull();
+    expect(screen.queryByTestId('large-board-notice')).toBeNull();
 
-    const btn2P = screen.getByTestId('select-players-2');
-    const btn3P = screen.getByTestId('select-players-3');
-    const btn4P = screen.getByTestId('select-players-4');
-    const btn5To8P = screen.getByTestId('select-players-8');
+    // Selecting 100 cards shows the friendly Large game board notice without blocking creation
+    fireEvent.click(screen.getByTestId('settings-card-preset-100'));
+    expect(screen.getByTestId('settings-card-count-display').textContent).toContain('100 Cards');
+    expect(screen.getByTestId('settings-pair-count-display').textContent).toContain('50 Pairs');
+    const notice = screen.getByTestId('large-board-notice');
+    expect(notice.textContent).toContain('Large game board');
+    expect(notice.textContent).toContain('recommend using a desktop or tablet');
 
-    expect(btn2P.textContent).toContain('2P');
-    expect(btn2P.textContent).toContain('Min 2P');
-    expect(btn2P.textContent).toContain('20 Cards');
-    expect(btn2P.textContent).toContain('10 Pairs');
+    // Acknowledging the notice hides it and prevents repeated interruptions
+    fireEvent.click(screen.getByTestId('dismiss-large-board-notice'));
+    expect(screen.queryByTestId('large-board-notice')).toBeNull();
+    fireEvent.click(screen.getByTestId('settings-card-preset-60'));
+    expect(screen.queryByTestId('large-board-notice')).toBeNull();
 
-    expect(btn3P.textContent).toContain('3P');
-    expect(btn3P.textContent).toContain('Min 3P');
-    expect(btn3P.textContent).toContain('40 Cards');
-    expect(btn3P.textContent).toContain('20 Pairs');
+    // Select 100-card board via slider and submit — automatically uses 2–8 player limits
+    fireEvent.change(screen.getByTestId('settings-card-count-slider'), { target: { value: '100' } });
 
-    expect(btn4P.textContent).toContain('4P');
-    expect(btn4P.textContent).toContain('Min 3P');
-    expect(btn4P.textContent).toContain('60 Cards');
-    expect(btn4P.textContent).toContain('30 Pairs');
-
-    expect(btn5To8P.textContent).toContain('5–8P');
-    expect(btn5To8P.textContent).toContain('Min 3P');
-    expect(btn5To8P.textContent).toContain('100 Cards');
-    expect(btn5To8P.textContent).toContain('50 Pairs');
-
-    // Separate 5P, 6P, 7P buttons must not exist
-    expect(screen.queryByTestId('select-players-5')).toBeNull();
-    expect(screen.queryByTestId('select-players-6')).toBeNull();
-    expect(screen.queryByTestId('select-players-7')).toBeNull();
-
-    // Selecting 5–8P and submitting creates a room with maxPlayers: 8
-    fireEvent.click(btn5To8P);
     fireEvent.click(screen.getByTestId('submit-create-room'));
     expect(mockCreateRoom).toHaveBeenCalledWith({
       nickname: 'HostHero',
       maxPlayers: 8,
+      memorySettings: {
+        cardCount: 100,
+        minPlayers: 2,
+        maxPlayers: 8,
+      },
     });
 
+    // Zod schema rejects invalid settings directly
+    expect(MemoryRoomSettingsSchema.safeParse({ cardCount: 15, minPlayers: 2, maxPlayers: 4 }).success).toBe(false);
+    expect(MemoryRoomSettingsSchema.safeParse({ cardCount: 40, minPlayers: 5, maxPlayers: 3 }).success).toBe(false);
+
     view.unmount();
+    resetLargeBoardNoticeAcknowledgement();
   });
 
   it('ignores stale mismatch resolution timers from an earlier round and validates all board sizes with Zod', () => {
@@ -1334,7 +1426,7 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
       gameType: 'memory-match',
       hostUid: 'p1',
       hostNickname: 'HostAlpha',
-      maxPlayers: 8,
+      memorySettings: { cardCount: 100, minPlayers: 2, maxPlayers: 8 },
       nowMs: 1_700_000_000_000,
     });
     for (let i = 2; i <= 8; i++) {

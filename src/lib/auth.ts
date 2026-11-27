@@ -7,6 +7,17 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   signInAnonymously,
   onAuthStateChanged,
+  GoogleAuthProvider,
+  EmailAuthProvider,
+  signInWithPopup,
+  linkWithPopup,
+  linkWithCredential,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  updateProfile,
+  signOut,
   type User,
   type Unsubscribe,
 } from 'firebase/auth';
@@ -126,6 +137,182 @@ export function subscribeToAuthChanges(
 ): Unsubscribe {
   const auth = getFirebaseAuth();
   return onAuthStateChanged(auth, onChange, onError);
+}
+
+export interface AuthActionResult {
+  user: User;
+  linkedFromAnonymous: boolean;
+  hadLinkingConflict?: boolean;
+}
+
+/**
+ * Maps Firebase Auth error codes into friendly, non-technical player messages.
+ */
+export function mapAuthErrorToMessage(error: unknown): string {
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '').toLowerCase()
+      : '';
+
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Incorrect email or password. Please check your credentials and try again.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/email-already-in-use':
+    case 'auth/credential-already-in-use':
+      return 'An account with this email already exists. Try signing in instead.';
+    case 'auth/weak-password':
+      return 'Password is too weak. Use at least 8 characters.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a moment before trying again.';
+    case 'auth/popup-closed-by-user':
+    case 'auth/cancelled-popup-request':
+      return 'Sign-in popup was closed before completing. Please try again.';
+    case 'auth/popup-blocked':
+      return 'Sign-in popup was blocked by your browser. Please allow popups and try again.';
+    case 'auth/network-request-failed':
+      return 'Network error while contacting authentication service. Please check your connection.';
+    default:
+      if (error instanceof Error && error.message && !error.message.includes('Firebase:')) {
+        return error.message;
+      }
+      return 'Authentication could not be completed. Please try again.';
+  }
+}
+
+/**
+ * Signs in with Google. If the user currently has an anonymous guest session,
+ * attempts `linkWithPopup` first so their UID and active multiplayer rooms are preserved.
+ * If the Google account already exists (`auth/credential-already-in-use`), falls back
+ * safely to signing in with that Google account and signals `hadLinkingConflict: true`.
+ */
+export async function signInWithGoogle(): Promise<AuthActionResult> {
+  const auth = getFirebaseAuth();
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+
+  const current = auth.currentUser;
+  if (current && current.isAnonymous) {
+    try {
+      const linked = await linkWithPopup(current, provider);
+      return { user: linked.user, linkedFromAnonymous: true };
+    } catch (err) {
+      const code =
+        err && typeof err === 'object' && 'code' in err
+          ? String((err as { code?: unknown }).code ?? '')
+          : '';
+      if (code === 'auth/credential-already-in-use' || code === 'auth/email-already-in-use') {
+        const signedIn = await signInWithPopup(auth, provider);
+        return {
+          user: signedIn.user,
+          linkedFromAnonymous: false,
+          hadLinkingConflict: true,
+        };
+      }
+      throw new Error(mapAuthErrorToMessage(err), { cause: err });
+    }
+  }
+
+  try {
+    const result = await signInWithPopup(auth, provider);
+    return { user: result.user, linkedFromAnonymous: false };
+  } catch (err) {
+    throw new Error(mapAuthErrorToMessage(err), { cause: err });
+  }
+}
+
+/**
+ * Registers a new Email & Password account. If currently signed in anonymously,
+ * links the email/password credential to preserve the existing Firebase UID & active rooms.
+ * Automatically sends an email verification link.
+ */
+export async function registerWithEmailAndPassword(params: {
+  email: string;
+  password: string;
+  displayName?: string;
+}): Promise<AuthActionResult> {
+  const auth = getFirebaseAuth();
+  const trimmedEmail = params.email.trim();
+  const current = auth.currentUser;
+
+  try {
+    let user: User;
+    let linkedFromAnonymous = false;
+
+    if (current && current.isAnonymous) {
+      const credential = EmailAuthProvider.credential(trimmedEmail, params.password);
+      const linked = await linkWithCredential(current, credential);
+      user = linked.user;
+      linkedFromAnonymous = true;
+    } else {
+      const created = await createUserWithEmailAndPassword(auth, trimmedEmail, params.password);
+      user = created.user;
+    }
+
+    if (params.displayName?.trim()) {
+      await updateProfile(user, { displayName: params.displayName.trim() }).catch(() => {});
+    }
+    await sendEmailVerification(user).catch(() => {});
+
+    return { user, linkedFromAnonymous };
+  } catch (err) {
+    throw new Error(mapAuthErrorToMessage(err), { cause: err });
+  }
+}
+
+/**
+ * Signs in with an existing Email & Password account.
+ */
+export async function signInWithEmailPassword(params: {
+  email: string;
+  password: string;
+}): Promise<User> {
+  const auth = getFirebaseAuth();
+  try {
+    const result = await signInWithEmailAndPassword(auth, params.email.trim(), params.password);
+    return result.user;
+  } catch (err) {
+    throw new Error(mapAuthErrorToMessage(err), { cause: err });
+  }
+}
+
+/**
+ * Sends a Firebase password reset email.
+ */
+export async function sendAccountPasswordReset(email: string): Promise<void> {
+  const auth = getFirebaseAuth();
+  try {
+    await sendPasswordResetEmail(auth, email.trim());
+  } catch (err) {
+    throw new Error(mapAuthErrorToMessage(err), { cause: err });
+  }
+}
+
+/**
+ * Resends the verification email for the currently signed-in non-anonymous user.
+ */
+export async function resendVerificationEmail(): Promise<void> {
+  const user = getCurrentUser();
+  if (!user || user.isAnonymous) {
+    throw new Error('Sign in with an email account to request email verification.');
+  }
+  try {
+    await sendEmailVerification(user);
+  } catch (err) {
+    throw new Error(mapAuthErrorToMessage(err), { cause: err });
+  }
+}
+
+/**
+ * Signs out the current Firebase user.
+ */
+export async function signOutUser(): Promise<void> {
+  if (!isFirebaseConfigured()) return;
+  const auth = getFirebaseAuth();
+  await signOut(auth);
 }
 
 /**

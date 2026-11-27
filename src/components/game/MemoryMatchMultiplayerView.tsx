@@ -16,13 +16,30 @@ import {
   AlertTriangle,
   Crown,
   Layers,
+  Lock,
+  SkipForward,
+  RefreshCw,
 } from 'lucide-react';
 import { useMultiplayerRoom } from '../../hooks/useMultiplayerRoom';
 import { MultiplayerLobbyAndWaitingRoom } from '../multiplayer/MultiplayerLobbyAndWaitingRoom';
 import {
+  MemoryRoomSettingsPanel,
+  LargeBoardNotice,
+} from '../multiplayer/MemoryRoomSettingsPanel';
+import { RoomSocialBar } from '../multiplayer/RoomSocialBar';
+import {
+  getRoomMemorySettings,
+  getMemoryPairCount,
+  isLargeMemoryBoard,
+  type MemoryRoomSettings,
+} from '../../types/multiplayer';
+import {
   startMemoryMatchMultiplayerGame,
   selectMemoryMatchMultiplayerCard,
   resolveMemoryMatchMultiplayerMismatch,
+  skipMemoryMatchMultiplayerTurn,
+  canSkipCurrentMemoryMatchTurn,
+  MISMATCH_REVEAL_DELAY_MS,
   getMemoryPlayerColor,
   getMatchedCardOwnerColor,
   startMemoryMatchRematch,
@@ -54,6 +71,9 @@ export const MemoryMatchMultiplayerView: React.FC<
     isReconnecting,
     isSynchronizing,
     isConnected,
+    connectionState,
+    failedReconnectRoomCode,
+    retryReconnect,
     error,
     preferredNickname,
     invitedRoomCode,
@@ -62,6 +82,8 @@ export const MemoryMatchMultiplayerView: React.FC<
     dismissInvitation,
     createRoom,
     joinRoom,
+    updateRoomSettings,
+    refreshRoom,
     syncRoom,
     leaveRoom,
     closeRoom,
@@ -71,6 +93,10 @@ export const MemoryMatchMultiplayerView: React.FC<
   const [actionError, setActionError] = useState<string | null>(null);
   const [isSubmittingCard, setIsSubmittingCard] = useState<boolean>(false);
   const [isSubmittingRematch, setIsSubmittingRematch] = useState<boolean>(false);
+  const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
+  const [isConfirmingSkip, setIsConfirmingSkip] = useState<boolean>(false);
+  const [isSkippingTurn, setIsSkippingTurn] = useState<boolean>(false);
+  const [skipNoticeText, setSkipNoticeText] = useState<string | null>(null);
   const [isCelebrationOpen, setIsCelebrationOpen] = useState<boolean>(false);
   const [roundTransitionText, setRoundTransitionText] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
@@ -79,7 +105,10 @@ export const MemoryMatchMultiplayerView: React.FC<
   const prevStatusRef = useRef<string | null>(null);
   const prevMatchedPairsRef = useRef<number>(0);
   const prevRoundNumberRef = useRef<number>(1);
+  const prevSkippedAtRef = useRef<number>(0);
+  const isSubmittingCardRef = useRef<boolean>(false);
   const roundTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isBoardActive = Boolean(room && room.status !== 'waiting' && room.memoryMatchState);
   useEffect(() => {
@@ -98,15 +127,45 @@ export const MemoryMatchMultiplayerView: React.FC<
       if (roundTransitionTimerRef.current) {
         clearTimeout(roundTransitionTimerRef.current);
       }
+      if (skipNoticeTimerRef.current) {
+        clearTimeout(skipNoticeTimerRef.current);
+      }
     };
   }, []);
 
   // Automatically resolve a mismatched pair after MISMATCH_REVEAL_DELAY_MS so cards turn face down.
-  // Scoped by roundNumber so a timer from an older round can never affect a newly started round.
+  // Clamps delay so cross-device clock skew can never freeze a game waiting for mismatch reset.
   const pendingResetAt = room?.memoryMatchState?.pendingResetAt ?? null;
   const activeRoomCode = room?.roomCode ?? null;
   const currentTurnUid = room?.currentTurnUid ?? null;
   const currentRoundNumber = room?.memoryMatchState?.roundNumber ?? 1;
+  const currentTurnSequence = room?.memoryMatchState?.turnSequence ?? 1;
+
+  // Reset confirmation dialog whenever the turn or round advances
+  useEffect(() => {
+    setIsConfirmingSkip(false);
+    isSubmittingCardRef.current = false;
+    setIsSubmittingCard(false);
+  }, [currentTurnUid, currentRoundNumber, currentTurnSequence]);
+
+  // Show a brief notification to all players whenever a turn is skipped
+  const lastSkippedTurn = room?.memoryMatchState?.lastSkippedTurn ?? null;
+  useEffect(() => {
+    if (!lastSkippedTurn || lastSkippedTurn.skippedAt <= prevSkippedAtRef.current) {
+      return;
+    }
+    prevSkippedAtRef.current = lastSkippedTurn.skippedAt;
+    setSkipNoticeText(
+      `${lastSkippedTurn.skippedNickname}'s inactive turn was skipped by ${lastSkippedTurn.skippedByNickname}.`
+    );
+    if (skipNoticeTimerRef.current) {
+      clearTimeout(skipNoticeTimerRef.current);
+    }
+    skipNoticeTimerRef.current = setTimeout(() => {
+      setSkipNoticeText(null);
+      skipNoticeTimerRef.current = null;
+    }, 5000);
+  }, [lastSkippedTurn]);
 
   useEffect(() => {
     if (!activeRoomCode || pendingResetAt === null || !uid) {
@@ -115,7 +174,9 @@ export const MemoryMatchMultiplayerView: React.FC<
 
     const isTurnOwner = currentTurnUid === uid;
     const extraFallbackMs = isTurnOwner ? 50 : isHost ? 900 : 1800;
-    const delayMs = Math.max(150, pendingResetAt - Date.now() + extraFallbackMs);
+    const rawDelayMs = pendingResetAt - Date.now() + extraFallbackMs;
+    const maxSafeDelayMs = MISMATCH_REVEAL_DELAY_MS + extraFallbackMs + 500;
+    const delayMs = Math.min(maxSafeDelayMs, Math.max(150, rawDelayMs));
     const timeout = setTimeout(() => {
       void resolveMemoryMatchMultiplayerMismatch(activeRoomCode, currentRoundNumber)
         .then((updatedRoom) => {
@@ -192,7 +253,7 @@ export const MemoryMatchMultiplayerView: React.FC<
   };
 
   const handleCardClick = async (cardId: number) => {
-    if (!room || !room.memoryMatchState || !uid || isSubmittingCard) return;
+    if (!room || !room.memoryMatchState || !uid || isSubmittingCard || isSubmittingCardRef.current) return;
     const mm = room.memoryMatchState;
 
     if (
@@ -210,6 +271,7 @@ export const MemoryMatchMultiplayerView: React.FC<
     }
 
     setActionError(null);
+    isSubmittingCardRef.current = true;
     setIsSubmittingCard(true);
     playFlip();
 
@@ -222,7 +284,29 @@ export const MemoryMatchMultiplayerView: React.FC<
     } catch (err) {
       setActionError(getUserFriendlyMultiplayerError(err, 'game-action'));
     } finally {
+      isSubmittingCardRef.current = false;
       setIsSubmittingCard(false);
+    }
+  };
+
+  const handleConfirmSkipTurn = async () => {
+    if (!room || !room.memoryMatchState || !room.currentTurnUid || isSkippingTurn) return;
+    setActionError(null);
+    setIsSkippingTurn(true);
+    playClick();
+    try {
+      const updated = await skipMemoryMatchMultiplayerTurn({
+        roomCode: room.roomCode,
+        expectedRoundNumber: room.memoryMatchState.roundNumber ?? 1,
+        expectedTurnUid: room.currentTurnUid,
+        expectedTurnSequence: room.memoryMatchState.turnSequence ?? 1,
+      });
+      syncRoom?.(updated);
+      setIsConfirmingSkip(false);
+    } catch (err) {
+      setActionError(getUserFriendlyMultiplayerError(err, 'game-action'));
+    } finally {
+      setIsSkippingTurn(false);
     }
   };
 
@@ -243,6 +327,19 @@ export const MemoryMatchMultiplayerView: React.FC<
     }
   };
 
+  const handleUpdateNextRoundSettings = async (nextSettings: MemoryRoomSettings) => {
+    if (!room || !isHost || isSavingSettings || room.status !== 'completed') return;
+    setActionError(null);
+    setIsSavingSettings(true);
+    try {
+      await updateRoomSettings(nextSettings);
+    } catch (err) {
+      setActionError(getUserFriendlyMultiplayerError(err, 'update-settings'));
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
   const handleCopyCode = async () => {
     if (!room) return;
     playClick();
@@ -254,6 +351,36 @@ export const MemoryMatchMultiplayerView: React.FC<
       setCopiedCode(false);
     }
   };
+
+  // Recovery state if the match is in_progress/completed but board cards are still hydrating
+  if (
+    room &&
+    (room.status === 'in_progress' || room.status === 'completed') &&
+    (!room.memoryMatchState || !Array.isArray(room.memoryMatchState.cards) || room.memoryMatchState.cards.length === 0)
+  ) {
+    return (
+      <div
+        className="max-w-lg mx-auto bg-[#201A36] border-2 border-[#56E0CB]/50 rounded-2xl p-6 text-center space-y-3"
+        data-testid="mp-memory-board-recovery"
+      >
+        <p className="font-['Press_Start_2P'] text-xs text-[#56E0CB] uppercase">
+          Syncing Game Board...
+        </p>
+        <p className="text-xs text-[#FFF0D7]/75">
+          Waiting for the shared board state from Firestore. You don&apos;t need to refresh the page.
+        </p>
+        <button
+          type="button"
+          onClick={() => void refreshRoom?.()}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#56E0CB] text-[#171329] text-xs font-bold cursor-pointer"
+          data-testid="mp-memory-refresh-board-btn"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          Sync Board Now
+        </button>
+      </div>
+    );
+  }
 
   // Render Lobby or Waiting Room if not yet in active/completed game
   if (!room || room.status === 'waiting' || !room.memoryMatchState) {
@@ -268,6 +395,8 @@ export const MemoryMatchMultiplayerView: React.FC<
         isReconnecting={isReconnecting}
         isSynchronizing={isSynchronizing}
         isConnected={isConnected}
+        failedReconnectRoomCode={failedReconnectRoomCode}
+        onRetryReconnect={retryReconnect}
         error={actionError || error}
         preferredNickname={preferredNickname}
         invitedRoomCode={invitedRoomCode}
@@ -276,6 +405,7 @@ export const MemoryMatchMultiplayerView: React.FC<
         onDismissInvitation={dismissInvitation}
         onCreateRoom={createRoom}
         onJoinRoom={joinRoom}
+        onUpdateRoomSettings={updateRoomSettings}
         onStartGame={handleStartGame}
         onLeaveRoom={leaveRoom}
         onCloseRoom={closeRoom}
@@ -290,6 +420,19 @@ export const MemoryMatchMultiplayerView: React.FC<
   const mm = room.memoryMatchState;
   const totalCards = mm.cards.length;
   const isGameOver = room.status === 'completed';
+  const roomSettings = getRoomMemorySettings(room);
+  const activeMatchSettings = mm.matchSettings ?? {
+    cardCount: totalCards,
+    minPlayers: roomSettings.minPlayers,
+    maxPlayers: roomSettings.maxPlayers,
+  };
+  const canStartRematchWithSettings =
+    isHost &&
+    isGameOver &&
+    !isSubmittingRematch &&
+    !isSavingSettings &&
+    room.playerOrder.length >= roomSettings.minPlayers &&
+    room.playerOrder.length <= roomSettings.maxPlayers;
 
   const myPlayer = uid ? room.players[uid] : null;
   const myConnected = myPlayer
@@ -305,6 +448,8 @@ export const MemoryMatchMultiplayerView: React.FC<
     ? room.players[room.currentTurnUid]
     : null;
 
+  const skipEligibility = canSkipCurrentMemoryMatchTurn(room, uid, nowMs);
+
   const orderedPlayers = mm.turnOrderUids
     .map((playerUid) => room.players[playerUid])
     .filter(Boolean);
@@ -313,10 +458,10 @@ export const MemoryMatchMultiplayerView: React.FC<
     .map((wUid) => room.players[wUid]?.nickname || 'Player')
     .join(' & ');
 
-  // Responsive grid layout for 20, 40, 60, or 100 cards:
-  // - Small mobile (<640px): 5 columns (4 for 20-card board) dynamically filling viewport width with compact height
-  // - Tablet (640px–767px): 8 columns for larger boards so cards stay readable & touch-friendly
-  // - Tablet/Desktop (>=768px): 5x4 (20), 8x5 (40), 10x6 (60), 10x10 (100)
+  // Responsive grid layout for any even card count from 10 to 100:
+  // - Small mobile (<640px): 4 cols (10–20 cards) or 5 cols (22–100 cards) dynamically filling viewport width
+  // - Tablet (640px–767px): 5 cols (<=20) or 8 cols (22–100) for comfortable touch targets
+  // - Tablet/Desktop (>=768px): 5 cols (<=20), 8 cols (22–40), 10 cols (42–100, preserving 10x10 for 100)
   const gridClasses =
     totalCards <= 20
       ? 'grid-cols-4 sm:grid-cols-5 w-full max-w-[380px] sm:max-w-[540px] gap-1.5 sm:gap-2.5'
@@ -335,10 +480,10 @@ export const MemoryMatchMultiplayerView: React.FC<
 
   const iconSizeClass =
     totalCards <= 20
-      ? 'w-7 h-7 sm:w-9 sm:h-9'
+      ? 'w-8 h-8 sm:w-10 sm:h-10'
       : totalCards <= 40
-      ? 'w-5 h-5 sm:w-7 sm:h-7'
-      : 'w-5 h-5 sm:w-6 sm:h-6';
+      ? 'w-6 h-6 sm:w-8 sm:h-8'
+      : 'w-6 h-6 sm:w-7 sm:h-7';
 
   const scoreboardGridCols =
     orderedPlayers.length === 2
@@ -384,14 +529,35 @@ export const MemoryMatchMultiplayerView: React.FC<
           >
             ROUND {mm.roundNumber ?? 1}
           </span>
-          {(isSynchronizing || isConnected === false) && (
+          {!isGameOver && (
             <span
-              className="inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full bg-[#FFC66D]/15 border border-[#FFC66D]/40 text-[#FFC66D] text-[10px] font-semibold animate-pulse"
-              data-testid="mp-memory-sync-indicator"
+              className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#171329] border border-[#3D345F] text-[10px] text-[#FFF0D7]/75 font-semibold"
+              data-testid="mp-memory-active-config-badge"
+              title="Settings are locked while a match is in progress"
             >
-              {isConnected === false ? 'Reconnecting...' : 'Syncing...'}
+              <Lock className="w-2.5 h-2.5 text-[#56E0CB]" />
+              {activeMatchSettings.cardCount} Cards · {activeMatchSettings.minPlayers}–
+              {activeMatchSettings.maxPlayers}P
             </span>
           )}
+          <span
+            className={`inline-flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+              connectionState === 'disconnected'
+                ? 'bg-[#FF776E]/15 border-[#FF776E]/50 text-[#FF776E] animate-pulse'
+                : connectionState === 'reconnecting' || connectionState === 'connecting'
+                ? 'bg-[#FFC66D]/15 border-[#FFC66D]/40 text-[#FFC66D] animate-pulse'
+                : 'bg-[#56E0CB]/12 border-[#56E0CB]/35 text-[#56E0CB]'
+            }`}
+            data-testid="mp-memory-sync-indicator"
+          >
+            {connectionState === 'disconnected'
+              ? 'Connection lost'
+              : connectionState === 'reconnecting'
+              ? 'Reconnecting...'
+              : connectionState === 'connecting'
+              ? 'Connecting...'
+              : 'Connected'}
+          </span>
         </div>
 
         {isHost ? (
@@ -656,14 +822,81 @@ export const MemoryMatchMultiplayerView: React.FC<
             <span className="sm:hidden shrink-0 px-1.5 py-0.5 rounded bg-[#171329]/80 border border-current/30 text-[9px] font-bold">
               {mm.matchedPairs}/{mm.totalPairs}
             </span>
+
+            {skipEligibility.eligible && !isConfirmingSkip && (
+              <button
+                type="button"
+                onClick={() => {
+                  playClick();
+                  setIsConfirmingSkip(true);
+                }}
+                data-testid="mp-memory-skip-turn-btn"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#FF776E]/20 hover:bg-[#FF776E]/30 border border-[#FF776E]/50 text-[#FF776E] text-[10px] font-bold shrink-0 cursor-pointer"
+              >
+                <SkipForward className="w-3 h-3" />
+                <span>Skip Turn</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Skip Turn Confirmation Bar */}
+        {isConfirmingSkip && !isGameOver && activeTurnPlayer && (
+          <div
+            role="alertdialog"
+            aria-label="Confirm skip inactive turn"
+            data-testid="mp-memory-skip-confirm"
+            className="max-w-xl mx-auto mt-1.5 px-3 py-2 rounded-xl bg-[#201A36] border border-[#FF776E] flex flex-wrap items-center justify-between gap-2 text-xs"
+          >
+            <span className="text-[#FFF0D7]">
+              Skip <strong className="text-[#FFC66D]">{activeTurnPlayer.nickname}</strong>&apos;s inactive turn? No points will be awarded.
+            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsConfirmingSkip(false)}
+                disabled={isSkippingTurn}
+                className="px-2.5 py-1 rounded-lg bg-[#292342] text-[#FFF0D7]/80 text-[11px] font-semibold cursor-pointer"
+                data-testid="mp-memory-skip-cancel-btn"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmSkipTurn()}
+                disabled={isSkippingTurn}
+                className="px-2.5 py-1 rounded-lg bg-[#FF776E] text-[#171329] text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                data-testid="mp-memory-skip-confirm-btn"
+              >
+                {isSkippingTurn ? 'Skipping...' : 'Confirm Skip'}
+              </button>
+            </div>
           </div>
         )}
       </div>
 
+      {/* Turn Skipped Live Notification */}
+      {skipNoticeText && (
+        <div
+          role="status"
+          data-testid="mp-memory-skip-notice"
+          className="max-w-xl mx-auto mb-2 px-3 py-1.5 rounded-lg bg-[#FFC66D]/15 border border-[#FFC66D]/50 text-[#FFC66D] text-xs text-center font-semibold"
+        >
+          {skipNoticeText}
+        </div>
+      )}
+
+      {/* Large-Board Notification during active match (dismissible, never blocks mobile play) */}
+      {!isGameOver && isLargeMemoryBoard(totalCards) && (
+        <div className="max-w-4xl mx-auto mb-2 sm:mb-3">
+          <LargeBoardNotice cardCount={totalCards} />
+        </div>
+      )}
+
       {/* Play Again / Next Round Panel (rendered above board when finished so mobile users don't scroll past 100 cards) */}
       {isGameOver && (
         <div
-          className="max-w-3xl mx-auto mb-2.5 sm:mb-4 p-3 sm:p-4 rounded-xl bg-[#201A36] border-2 border-[#FFC66D]/60"
+          className="max-w-3xl mx-auto mb-2.5 sm:mb-4 p-3 sm:p-4 rounded-xl bg-[#201A36] border-2 border-[#FFC66D]/60 space-y-3"
           data-testid="mp-memory-rematch-panel"
         >
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-3">
@@ -673,8 +906,10 @@ export const MemoryMatchMultiplayerView: React.FC<
               </h3>
               <p className="text-xs text-[#FFF0D7]/75" data-testid="mp-memory-rematch-status">
                 {isHost
-                  ? `Click Play Again to immediately deal a fresh shuffled board for Round ${(mm.roundNumber ?? 1) + 1}!`
-                  : `Waiting for the host to start Round ${(mm.roundNumber ?? 1) + 1}...`}
+                  ? room.playerOrder.length < roomSettings.minPlayers
+                    ? `Need at least ${roomSettings.minPlayers} players for Round ${(mm.roundNumber ?? 1) + 1} (currently ${room.playerOrder.length}). Lower minimum players or wait.`
+                    : `Click Play Again to deal ${roomSettings.cardCount} cards (${getMemoryPairCount(roomSettings.cardCount)} pairs) for Round ${(mm.roundNumber ?? 1) + 1}!`
+                  : `Waiting for the host to start Round ${(mm.roundNumber ?? 1) + 1} (${roomSettings.cardCount} cards · ${getMemoryPairCount(roomSettings.cardCount)} pairs)...`}
               </p>
             </div>
 
@@ -683,8 +918,8 @@ export const MemoryMatchMultiplayerView: React.FC<
                 <button
                   type="button"
                   onClick={() => void handleStartNextRound()}
-                  disabled={isSubmittingRematch}
-                  className="w-full sm:w-auto px-4 sm:px-5 py-2.5 sm:py-3 rounded-xl font-['Press_Start_2P'] text-[10px] sm:text-xs uppercase tracking-wider bg-[#FF776E] hover:bg-[#ff8d85] text-[#171329] shadow-[0_0_20px_rgba(255,119,110,0.4)] transition-all cursor-pointer disabled:opacity-60"
+                  disabled={!canStartRematchWithSettings}
+                  className="w-full sm:w-auto px-4 sm:px-5 py-2.5 sm:py-3 rounded-xl font-['Press_Start_2P'] text-[10px] sm:text-xs uppercase tracking-wider bg-[#FF776E] hover:bg-[#ff8d85] text-[#171329] shadow-[0_0_20px_rgba(255,119,110,0.4)] transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                   data-testid="mp-memory-play-again-btn"
                 >
                   Play Again
@@ -692,15 +927,29 @@ export const MemoryMatchMultiplayerView: React.FC<
               </div>
             )}
           </div>
+
+          {/* Host-editable / Guest read-only settings for the upcoming round */}
+          <MemoryRoomSettingsPanel
+            settings={roomSettings}
+            canEdit={isHost}
+            heading={isHost ? 'Next Round Settings' : 'Upcoming Round Settings'}
+            lockedReason="Host Controlled"
+            joinedPlayerCount={room.playerOrder.length}
+            isSaving={isSavingSettings}
+            onChange={(next) => void handleUpdateNextRoundSettings(next)}
+            showLargeBoardNotice={true}
+            compact={true}
+          />
         </div>
       )}
 
-      {/* Shared Memory Match Card Grid */}
-      <div
-        className={`grid ${gridClasses} mx-auto bg-[#201A36] border-2 sm:border-4 border-[#292342] rounded-xl sm:rounded-2xl p-1.5 sm:p-3 md:p-4 shadow-2xl`}
-        role="grid"
-        aria-label={`Multiplayer Memory Match Board with ${totalCards} cards`}
-      >
+      {/* Shared Memory Match Card Grid + Docked Board-Anchored Reaction Toolbar */}
+      <div className="relative w-full" data-testid="memory-board-and-reactions">
+        <div
+          className={`grid ${gridClasses} mx-auto bg-[#201A36] border-2 sm:border-4 border-[#292342] rounded-xl sm:rounded-2xl p-1.5 sm:p-3 md:p-4 shadow-2xl`}
+          role="grid"
+          aria-label={`Multiplayer Memory Match Board with ${totalCards} cards`}
+        >
         {mm.cards.map((card, index) => {
           const isFaceUp = card.isFlipped || card.isMatched;
           const canSelect =
@@ -798,6 +1047,10 @@ export const MemoryMatchMultiplayerView: React.FC<
             </button>
           );
         })}
+        </div>
+
+        {/* Board-Docked Reaction Toolbar & Compact Floating Chat */}
+        <RoomSocialBar room={room} uid={uid} isHost={isHost} compact={true} anchorMode="board" />
       </div>
 
       {/* Victory Celebration Modal */}

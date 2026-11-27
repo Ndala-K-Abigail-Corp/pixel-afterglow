@@ -106,8 +106,11 @@ import {
   isValidRoomStateTransition,
   computeRoomExpiresAt,
   isRoomExpired,
-  getMinimumPlayersToStart,
-  MEMORY_MULTIPLAYER_CONFIGS,
+  DEFAULT_MEMORY_ROOM_SETTINGS,
+  MEMORY_VALID_CARD_COUNTS,
+  isValidMemoryCardCount,
+  isValidMemoryRoomSettings,
+  getRoomMinimumPlayers,
   ROOM_EXPIRY_POLICIES_MS,
 } from '../types/multiplayer';
 
@@ -224,38 +227,34 @@ describe('Phase 1 shared multiplayer room data structures & policies', () => {
     );
   });
 
-  it('defines Memory Match board sizes and minimum player requirements for 2 to 8 players', () => {
-    expect(MEMORY_MULTIPLAYER_CONFIGS[2]).toEqual({
-      maxPlayers: 2,
-      minPlayersToStart: 2,
-      totalCards: 20,
-      matchingPairs: 10,
+  it('validates flexible Memory Match card counts (10–100 even) and independent player limits (2–8)', () => {
+    expect(DEFAULT_MEMORY_ROOM_SETTINGS).toEqual({
+      cardCount: 20,
+      minPlayers: 2,
+      maxPlayers: 8,
     });
-    expect(MEMORY_MULTIPLAYER_CONFIGS[3]).toEqual({
-      maxPlayers: 3,
-      minPlayersToStart: 3,
-      totalCards: 40,
-      matchingPairs: 20,
-    });
-    expect(MEMORY_MULTIPLAYER_CONFIGS[4]).toEqual({
-      maxPlayers: 4,
-      minPlayersToStart: 3,
-      totalCards: 60,
-      matchingPairs: 30,
-    });
-    for (const count of [5, 6, 7, 8] as const) {
-      expect(MEMORY_MULTIPLAYER_CONFIGS[count]).toEqual({
-        maxPlayers: count,
-        minPlayersToStart: 3,
-        totalCards: 100,
-        matchingPairs: 50,
-      });
+    expect(MEMORY_VALID_CARD_COUNTS).toHaveLength(46);
+    expect(MEMORY_VALID_CARD_COUNTS[0]).toBe(10);
+    expect(MEMORY_VALID_CARD_COUNTS[MEMORY_VALID_CARD_COUNTS.length - 1]).toBe(100);
+
+    for (const c of MEMORY_VALID_CARD_COUNTS) {
+      expect(isValidMemoryCardCount(c)).toBe(true);
+    }
+    for (const invalid of [-2, 0, 8, 9, 11, 21, 59, 99, 101, 102, 20.5]) {
+      expect(isValidMemoryCardCount(invalid)).toBe(false);
     }
 
-    expect(getMinimumPlayersToStart(2, 'memory-match')).toBe(2);
-    for (const cap of [3, 4, 5, 6, 7, 8]) {
-      expect(getMinimumPlayersToStart(cap, 'memory-match')).toBe(3);
-    }
+    expect(isValidMemoryRoomSettings({ cardCount: 100, minPlayers: 2, maxPlayers: 2 })).toBe(true);
+    expect(isValidMemoryRoomSettings({ cardCount: 10, minPlayers: 2, maxPlayers: 8 })).toBe(true);
+    expect(isValidMemoryRoomSettings({ cardCount: 20, minPlayers: 5, maxPlayers: 3 })).toBe(false);
+    expect(
+      getRoomMinimumPlayers({
+        gameType: 'memory-match',
+        maxPlayers: 8,
+        memoryRoomSettings: { cardCount: 60, minPlayers: 4, maxPlayers: 8 },
+      })
+    ).toBe(4);
+    expect(getRoomMinimumPlayers({ gameType: 'tic-tac-toe', maxPlayers: 2 })).toBe(2);
   });
 });
 

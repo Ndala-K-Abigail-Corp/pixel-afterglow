@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useMultiplayerRoom } from '../../hooks/useMultiplayerRoom';
 import { MultiplayerLobbyAndWaitingRoom } from '../multiplayer/MultiplayerLobbyAndWaitingRoom';
+import { RoomSocialBar } from '../multiplayer/RoomSocialBar';
 import {
   startTicTacToeMultiplayerGame,
   makeTicTacToeMultiplayerMove,
@@ -451,8 +452,9 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
         )}
       </div>
 
-      {/* Synchronized 3x3 Board */}
-      <div className="w-full max-w-[320px] sm:max-w-[380px] aspect-square mx-auto bg-[#201A36] border-4 border-[#292342] rounded-2xl p-2.5 sm:p-3 shadow-2xl relative">
+      {/* Synchronized 3x3 Board + Docked Board-Anchored Reaction Toolbar */}
+      <div className="relative max-w-md mx-auto" data-testid="ttt-board-and-reactions">
+        <div className="w-full max-w-[320px] sm:max-w-[380px] aspect-square mx-auto bg-[#201A36] border-4 border-[#292342] rounded-2xl p-2.5 sm:p-3 shadow-2xl relative">
         <div className="absolute inset-0 crt-subtle-overlay rounded-2xl pointer-events-none opacity-40" />
 
         <div
@@ -526,6 +528,10 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
             );
           })}
         </div>
+      </div>
+
+        {/* Board-Docked Reaction Toolbar & Compact Floating Chat */}
+        <RoomSocialBar room={room} uid={uid} isHost={isHost} compact={true} anchorMode="board" />
       </div>
 
       {/* Consensual Rematch Panel after game completion */}
