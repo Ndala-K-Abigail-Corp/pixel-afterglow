@@ -242,7 +242,7 @@ describe('Phase 2 – Shared Multiplayer Room Infrastructure', () => {
         gameType: 'memory-match',
         hostUid: 'host-1',
         hostNickname: 'HostAce',
-        maxPlayers: 8,
+        memorySettings: { cardCount: 40, minPlayers: 3, maxPlayers: 8 },
         nowMs: BASE_NOW,
       });
 

@@ -8,12 +8,14 @@ import {
   RoomPlayer,
   MultiplayerMemoryCard,
   MemoryMatchMultiplayerState,
-  MemoryMultiplayerPlayerCount,
-  MEMORY_MULTIPLAYER_CONFIGS,
-  getMinimumPlayersToStart,
+  SKIP_TURN_INACTIVITY_MS,
+  isValidMemoryCardCount,
+  getMemoryPairCount,
+  getRoomMemorySettings,
   computeRoomExpiresAt,
   isRoomExpired,
 } from '../types/multiplayer';
+import { validateMemoryRoomSettingsInput } from '../schemas/multiplayerSchemas';
 import { MEMORY_CARD_SYMBOLS, type CardSymbolDefinition } from './memoryMatch';
 import {
   ROOMS_COLLECTION,
@@ -233,28 +235,22 @@ export const MEMORY_SYMBOL_ICON_IDS: ReadonlyArray<string> = MULTIPLAYER_MEMORY_
 );
 
 /**
- * Generates and shuffles the shared multiplayer Memory Match board for 2 to 8 players:
- * - 2 players -> 20 cards (10 unique pairs)
- * - 3 players -> 40 cards (20 unique pairs)
- * - 4 players -> 60 cards (30 unique pairs)
- * - 5 players -> 100 cards (50 unique pairs)
- * - 6 players -> 100 cards (50 unique pairs)
- * - 7 players -> 100 cards (50 unique pairs)
- * - 8 players -> 100 cards (50 unique pairs)
+ * Generates and shuffles a shared multiplayer Memory Match board for any valid even card count
+ * between 10 and 100 (5 to 50 unique symbol pairs), completely independent of player count.
  */
 export function createMultiplayerMemoryDeck(
-  playerCount: MemoryMultiplayerPlayerCount,
+  cardCount: number,
   randomFn: () => number = Math.random
 ): MultiplayerMemoryCard[] {
-  const config = MEMORY_MULTIPLAYER_CONFIGS[playerCount];
-  if (!config) {
+  if (!isValidMemoryCardCount(cardCount)) {
     throw new MultiplayerRoomError(
-      'INVALID_STATE_TRANSITION',
-      'Memory Match requires 2 to 8 players.'
+      'INVALID_ROOM_SETTINGS',
+      'Card count must be an even integer between 10 and 100.'
     );
   }
 
-  const selectedSymbols = MULTIPLAYER_MEMORY_SYMBOLS.slice(0, config.matchingPairs);
+  const pairCount = getMemoryPairCount(cardCount);
+  const selectedSymbols = MULTIPLAYER_MEMORY_SYMBOLS.slice(0, pairCount);
 
   const unshuffled: MultiplayerMemoryCard[] = [];
   let nextId = 0;
@@ -334,13 +330,10 @@ export function applyStartMemoryMatchGame(params: {
     );
   }
 
-  const maxCapacity = room.maxPlayers as MemoryMultiplayerPlayerCount;
-  if (!MEMORY_MULTIPLAYER_CONFIGS[maxCapacity]) {
-    throw new MultiplayerRoomError(
-      'INVALID_STATE_TRANSITION',
-      'Invalid player capacity for Memory Match.'
-    );
-  }
+  const settings = validateMemoryRoomSettingsInput(
+    getRoomMemorySettings(room),
+    room.playerOrder.length
+  );
 
   validateHostCanStartGame(room, callerUid, nowMs);
 
@@ -355,18 +348,9 @@ export function applyStartMemoryMatchGame(params: {
     }
   }
 
-  // Use the actual participating player count (not necessarily the maximum room capacity)
   const turnOrderUids = [...room.playerOrder];
-  const participatingPlayerCount = turnOrderUids.length as MemoryMultiplayerPlayerCount;
-  const config = MEMORY_MULTIPLAYER_CONFIGS[participatingPlayerCount];
-  if (!config) {
-    throw new MultiplayerRoomError(
-      'INVALID_STATE_TRANSITION',
-      'Invalid participating player count for Memory Match.'
-    );
-  }
-
-  const cards = createMultiplayerMemoryDeck(participatingPlayerCount, randomFn);
+  const cards = createMultiplayerMemoryDeck(settings.cardCount, randomFn);
+  const totalPairs = getMemoryPairCount(settings.cardCount);
   const firstTurnUid = turnOrderUids[0];
 
   const resetPlayers: Record<string, RoomPlayer> = {};
@@ -380,7 +364,7 @@ export function applyStartMemoryMatchGame(params: {
 
   const memoryMatchState: MemoryMatchMultiplayerState = {
     cards,
-    totalPairs: config.matchingPairs,
+    totalPairs,
     matchedPairs: 0,
     roundNumber: 1,
     matchedByPairKey: {},
@@ -392,11 +376,17 @@ export function applyStartMemoryMatchGame(params: {
     pendingResetAt: null,
     winnerUids: [],
     isTie: false,
+    matchSettings: { ...settings },
+    turnSequence: 1,
+    turnStartedAt: nowMs,
+    lastSkippedTurn: null,
   };
 
   return {
     ...room,
     status: 'in_progress',
+    maxPlayers: settings.maxPlayers,
+    memoryRoomSettings: settings,
     players: resetPlayers,
     currentTurnUid: firstTurnUid,
     startedAt: nowMs,
@@ -463,6 +453,8 @@ export function applyResolveMemoryMatchMismatch(params: {
       currentTurnUid: nextUid,
       flippedCardIds: [],
       pendingResetAt: null,
+      turnSequence: (mm.turnSequence ?? 1) + 1,
+      turnStartedAt: nowMs,
     },
   };
 }
@@ -695,6 +687,8 @@ export function applySelectMemoryMatchCard(params: {
           lastMatchedPairKey: matchedKey,
           flippedCardIds: [],
           pendingResetAt: null,
+          turnSequence: (mm.turnSequence ?? 1) + 1,
+          turnStartedAt: nowMs,
         },
       },
     };
@@ -768,26 +762,26 @@ export function applyStartMemoryMatchRematch(params: {
     );
   }
 
-  const maxCapacity = room.maxPlayers as MemoryMultiplayerPlayerCount;
-  if (!MEMORY_MULTIPLAYER_CONFIGS[maxCapacity]) {
-    throw new MultiplayerRoomError('INVALID_STATE_TRANSITION', 'Invalid player capacity for Memory Match.');
-  }
+  const settings = validateMemoryRoomSettingsInput(
+    getRoomMemorySettings(room),
+    room.playerOrder.length
+  );
 
-  const minPlayers = getMinimumPlayersToStart(room.maxPlayers, room.gameType);
   const turnOrderUids = [...room.playerOrder];
-  if (turnOrderUids.length < minPlayers) {
+  if (turnOrderUids.length < settings.minPlayers) {
     throw new MultiplayerRoomError(
       'NOT_ENOUGH_PLAYERS',
-      `At least ${minPlayers} players are required to start the next round.`
+      `At least ${settings.minPlayers} players are required to start the next round.`
+    );
+  }
+  if (turnOrderUids.length > settings.maxPlayers) {
+    throw new MultiplayerRoomError(
+      'ROOM_FULL',
+      `Room exceeds maximum capacity (${turnOrderUids.length}/${settings.maxPlayers}).`
     );
   }
 
-  const participatingPlayerCount = turnOrderUids.length as MemoryMultiplayerPlayerCount;
-  const config = MEMORY_MULTIPLAYER_CONFIGS[participatingPlayerCount];
-  if (!config) {
-    throw new MultiplayerRoomError('INVALID_STATE_TRANSITION', 'Invalid player count for Memory Match.');
-  }
-
+  const totalPairs = getMemoryPairCount(settings.cardCount);
   const firstTurnUid = turnOrderUids[0];
 
   const resetPlayers: Record<string, RoomPlayer> = {};
@@ -801,8 +795,8 @@ export function applyStartMemoryMatchRematch(params: {
   }
 
   const memoryMatchState: MemoryMatchMultiplayerState = {
-    cards: createMultiplayerMemoryDeck(participatingPlayerCount, randomFn),
-    totalPairs: config.matchingPairs,
+    cards: createMultiplayerMemoryDeck(settings.cardCount, randomFn),
+    totalPairs,
     matchedPairs: 0,
     roundNumber: (room.memoryMatchState.roundNumber ?? 1) + 1,
     matchedByPairKey: {},
@@ -814,11 +808,17 @@ export function applyStartMemoryMatchRematch(params: {
     pendingResetAt: null,
     winnerUids: [],
     isTie: false,
+    matchSettings: { ...settings },
+    turnSequence: 1,
+    turnStartedAt: nowMs,
+    lastSkippedTurn: null,
   };
 
   return {
     ...room,
     status: 'in_progress',
+    maxPlayers: settings.maxPlayers,
+    memoryRoomSettings: settings,
     players: resetPlayers,
     currentTurnUid: firstTurnUid,
     startedAt: nowMs,
@@ -990,6 +990,202 @@ export async function resolveMemoryMatchMultiplayerMismatch(
     if (nextRoom === currentRoom) {
       return currentRoom;
     }
+
+    if (typeof transaction.update === 'function') {
+      transaction.update(roomRef, {
+        currentTurnUid: nextRoom.currentTurnUid,
+        lastActivityAt: nextRoom.lastActivityAt,
+        expiresAt: nextRoom.expiresAt,
+        memoryMatchState: nextRoom.memoryMatchState,
+      });
+    } else {
+      transaction.set(roomRef, nextRoom);
+    }
+    return nextRoom;
+  });
+}
+
+/**
+ * Evaluates whether a room member is currently eligible to request skipping the active turn
+ * in Multiplayer Memory Match.
+ * - Active match only (`in_progress`), caller must be a connected room member and NOT the active turn player.
+ * - Allowed immediately if the active turn player is disconnected/offline, OR once the turn
+ *   has been inactive for at least `SKIP_TURN_INACTIVITY_MS` (30 seconds).
+ */
+export function canSkipCurrentMemoryMatchTurn(
+  room: MultiplayerRoomDocument | null | undefined,
+  callerUid: string | null | undefined,
+  nowMs: number = Date.now()
+): { eligible: boolean; reason: 'disconnected' | 'inactive' | null; remainingMs: number } {
+  if (!room || !callerUid || room.status !== 'in_progress' || !room.memoryMatchState) {
+    return { eligible: false, reason: null, remainingMs: SKIP_TURN_INACTIVITY_MS };
+  }
+  const mm = room.memoryMatchState;
+  const activeUid = room.currentTurnUid ?? mm.currentTurnUid;
+  if (!activeUid || activeUid === callerUid || !(callerUid in room.players)) {
+    return { eligible: false, reason: null, remainingMs: SKIP_TURN_INACTIVITY_MS };
+  }
+  if (mm.turnOrderUids.length < 2) {
+    return { eligible: false, reason: null, remainingMs: SKIP_TURN_INACTIVITY_MS };
+  }
+
+  const activePlayer = room.players[activeUid];
+  if (!activePlayer || !isPlayerEffectivelyConnected(activePlayer, nowMs)) {
+    return { eligible: true, reason: 'disconnected', remainingMs: 0 };
+  }
+
+  const turnStartedAt = mm.turnStartedAt ?? room.lastActivityAt ?? room.startedAt ?? nowMs;
+  const elapsedMs = Math.max(0, nowMs - turnStartedAt);
+  if (elapsedMs >= SKIP_TURN_INACTIVITY_MS) {
+    return { eligible: true, reason: 'inactive', remainingMs: 0 };
+  }
+
+  return {
+    eligible: false,
+    reason: null,
+    remainingMs: Math.max(0, SKIP_TURN_INACTIVITY_MS - elapsedMs),
+  };
+}
+
+/**
+ * Pure validator & reducer for skipping an inactive/disconnected player's turn.
+ * Validates room membership, non-self skip, inactivity/disconnect eligibility, exact round,
+ * exact turn UID, and exact turnSequence so only ONE skip can ever apply to a given turn.
+ * Turns any revealed unmatched cards face down, awards 0 points/matches, advances the turn,
+ * increments `turnSequence` by 1, and records `lastSkippedTurn` for all players.
+ */
+export function applySkipMemoryMatchTurn(params: {
+  room: MultiplayerRoomDocument;
+  callerUid: string;
+  expectedRoundNumber: number;
+  expectedTurnUid: string;
+  expectedTurnSequence: number;
+  nowMs?: number;
+}): MultiplayerRoomDocument {
+  const {
+    room,
+    callerUid,
+    expectedRoundNumber,
+    expectedTurnUid,
+    expectedTurnSequence,
+  } = params;
+  const nowMs = params.nowMs ?? Date.now();
+
+  if (room.gameType !== 'memory-match') {
+    throw new MultiplayerRoomError('INVALID_STATE_TRANSITION', 'Room is not configured for Memory Match.');
+  }
+  if (room.status === 'closed') {
+    throw new MultiplayerRoomError('ROOM_CLOSED', 'This room is closed.');
+  }
+  if (isRoomExpired(room, nowMs)) {
+    throw new MultiplayerRoomError('ROOM_EXPIRED', 'This room has expired.');
+  }
+  if (room.status !== 'in_progress' || !room.memoryMatchState) {
+    throw new MultiplayerRoomError('INVALID_STATE_TRANSITION', 'Turns can only be skipped during an active match.');
+  }
+  if (!(callerUid in room.players)) {
+    throw new MultiplayerRoomError('PERMISSION_DENIED', 'Only players in this room can skip an inactive turn.');
+  }
+
+  const mm = room.memoryMatchState;
+  const currentRound = mm.roundNumber ?? 1;
+  const currentTurnSeq = mm.turnSequence ?? 1;
+  const activeUid = room.currentTurnUid ?? mm.currentTurnUid;
+
+  if (
+    currentRound !== expectedRoundNumber ||
+    activeUid !== expectedTurnUid ||
+    currentTurnSeq !== expectedTurnSequence
+  ) {
+    throw new MultiplayerRoomError(
+      'INVALID_MOVE',
+      'That turn has already ended or been skipped.'
+    );
+  }
+
+  if (activeUid === callerUid) {
+    throw new MultiplayerRoomError('INVALID_MOVE', 'You cannot skip your own active turn.');
+  }
+
+  const eligibility = canSkipCurrentMemoryMatchTurn(room, callerUid, nowMs);
+  if (!eligibility.eligible) {
+    throw new MultiplayerRoomError(
+      'INVALID_MOVE',
+      'Please wait until the current player is inactive before skipping their turn.'
+    );
+  }
+
+  // Turn any temporarily flipped unmatched cards back face down without awarding matches/points
+  const nextCards = mm.cards.map((card) =>
+    card.isFlipped && !card.isMatched ? { ...card, isFlipped: false } : card
+  );
+
+  const { nextIndex, nextUid } = getNextTurnCursor(
+    mm.turnOrderUids,
+    mm.currentTurnIndex,
+    room.players,
+    nowMs
+  );
+
+  const nextSequence = currentTurnSeq + 1;
+  const skippedNickname = room.players[activeUid]?.nickname ?? 'Player';
+  const skippedByNickname = room.players[callerUid]?.nickname ?? 'Player';
+
+  return {
+    ...room,
+    currentTurnUid: nextUid,
+    lastActivityAt: nowMs,
+    expiresAt: computeRoomExpiresAt('in_progress', nowMs),
+    memoryMatchState: {
+      ...mm,
+      cards: nextCards,
+      flippedCardIds: [],
+      pendingResetAt: null,
+      lastMatchedPairKey: null,
+      currentTurnIndex: nextIndex,
+      currentTurnUid: nextUid,
+      turnSequence: nextSequence,
+      turnStartedAt: nowMs,
+      lastSkippedTurn: {
+        skippedUid: activeUid,
+        skippedNickname,
+        skippedByUid: callerUid,
+        skippedByNickname,
+        roundNumber: currentRound,
+        turnSequence: nextSequence,
+        skippedAt: nowMs,
+      },
+    },
+  };
+}
+
+/**
+ * Firestore transaction: skips an inactive/disconnected player's turn atomically.
+ */
+export async function skipMemoryMatchMultiplayerTurn(params: {
+  roomCode: string;
+  expectedRoundNumber: number;
+  expectedTurnUid: string;
+  expectedTurnSequence: number;
+}): Promise<MultiplayerRoomDocument> {
+  const normalizedCode = normalizeRoomCode(params.roomCode);
+  const user = await ensureAnonymousSession();
+  const roomRef = getDocRef<MultiplayerRoomDocument>(ROOMS_COLLECTION, normalizedCode);
+
+  return runFirestoreTransaction(async (transaction) => {
+    const snap = await transaction.get(roomRef);
+    if (!snap.exists()) {
+      throw new MultiplayerRoomError('ROOM_NOT_FOUND', 'Room no longer exists.');
+    }
+
+    const nextRoom = applySkipMemoryMatchTurn({
+      room: snap.data(),
+      callerUid: user.uid,
+      expectedRoundNumber: params.expectedRoundNumber,
+      expectedTurnUid: params.expectedTurnUid,
+      expectedTurnSequence: params.expectedTurnSequence,
+      nowMs: Date.now(),
+    });
 
     if (typeof transaction.update === 'function') {
       transaction.update(roomRef, {

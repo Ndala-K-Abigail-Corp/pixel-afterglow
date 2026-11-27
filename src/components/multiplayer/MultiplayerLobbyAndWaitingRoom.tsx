@@ -26,10 +26,14 @@ import {
   MultiplayerGameType,
   MultiplayerRoomDocument,
   MemoryMultiplayerPlayerCount,
-  MEMORY_MULTIPLAYER_CONFIGS,
-  MEMORY_ROOM_CAPACITY_OPTIONS,
-  getMinimumPlayersToStart,
+  MemoryRoomSettings,
+  DEFAULT_MEMORY_ROOM_SETTINGS,
+  getRoomMemorySettings,
+  getRoomMinimumPlayers,
+  getMemoryPairCount,
 } from '../../types/multiplayer';
+import { MemoryRoomSettingsPanel } from './MemoryRoomSettingsPanel';
+import { RoomSocialBar } from './RoomSocialBar';
 import {
   isPlayerEffectivelyConnected,
   normalizeRoomCode,
@@ -57,6 +61,8 @@ export interface MultiplayerLobbyAndWaitingRoomProps {
   isReconnecting: boolean;
   isSynchronizing?: boolean;
   isConnected?: boolean;
+  failedReconnectRoomCode?: string | null;
+  onRetryReconnect?: () => Promise<void>;
   error: string | null;
   preferredNickname: string;
   invitedRoomCode?: string | null;
@@ -66,11 +72,15 @@ export interface MultiplayerLobbyAndWaitingRoomProps {
   onCreateRoom: (params: {
     nickname: string;
     maxPlayers?: MemoryMultiplayerPlayerCount;
+    memorySettings?: Partial<MemoryRoomSettings>;
   }) => Promise<MultiplayerRoomDocument | null>;
   onJoinRoom: (params: {
     roomCode: string;
     nickname: string;
   }) => Promise<MultiplayerRoomDocument | null>;
+  onUpdateRoomSettings?: (
+    settings: MemoryRoomSettings
+  ) => Promise<MultiplayerRoomDocument | null>;
   onStartGame: () => Promise<void>;
   onLeaveRoom: () => Promise<void>;
   onCloseRoom: () => Promise<void>;
@@ -89,6 +99,8 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
   isReconnecting,
   isSynchronizing = false,
   isConnected = true,
+  failedReconnectRoomCode = null,
+  onRetryReconnect,
   error,
   preferredNickname,
   invitedRoomCode,
@@ -97,6 +109,7 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
   onDismissInvitation,
   onCreateRoom,
   onJoinRoom,
+  onUpdateRoomSettings,
   onStartGame,
   onLeaveRoom,
   onCloseRoom,
@@ -121,8 +134,10 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
   const [roomCodeInput, setRoomCodeInput] = useState<string>(
     () => initialInvitedCode
   );
-  const [selectedMaxPlayers, setSelectedMaxPlayers] =
-    useState<MemoryMultiplayerPlayerCount>(2);
+  const [memorySettingsDraft, setMemorySettingsDraft] = useState<MemoryRoomSettings>(() => ({
+    ...DEFAULT_MEMORY_ROOM_SETTINGS,
+  }));
+  const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [copiedInviteLink, setCopiedInviteLink] = useState<boolean>(false);
   const [sharedFeedback, setSharedFeedback] = useState<boolean>(false);
@@ -244,7 +259,11 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
 
     await onCreateRoom({
       nickname: cleanedNickname,
-      maxPlayers: gameType === 'memory-match' ? selectedMaxPlayers : 2,
+      maxPlayers:
+        gameType === 'memory-match'
+          ? (memorySettingsDraft.maxPlayers as MemoryMultiplayerPlayerCount)
+          : 2,
+      ...(gameType === 'memory-match' ? { memorySettings: memorySettingsDraft } : {}),
     });
   };
 
@@ -293,25 +312,29 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
       .map((playerUid) => room.players[playerUid])
       .filter(Boolean);
     const joinedCount = joinedPlayers.length;
-    const requiredCount = room.maxPlayers;
-    const minRequired = getMinimumPlayersToStart(requiredCount, gameType);
+    const memorySettings =
+      gameType === 'memory-match' ? getRoomMemorySettings(room) : null;
+    const requiredCount = memorySettings ? memorySettings.maxPlayers : room.maxPlayers;
+    const minRequired = getRoomMinimumPlayers(room);
     const hasMinimumPlayers = joinedCount >= minRequired;
     const isRoomFull = joinedCount >= requiredCount;
     const allPlayersConnected = joinedPlayers.every((p) =>
       isPlayerEffectivelyConnected(p, nowMs)
     );
     const canHostStart =
-      isHost && hasMinimumPlayers && allPlayersConnected && !isLoading;
+      isHost && hasMinimumPlayers && allPlayersConnected && !isLoading && !isSavingSettings;
 
     const emptySlotsCount = Math.max(0, requiredCount - joinedCount);
-    const effectivePlayerCount = Math.max(
-      minRequired,
-      Math.min(requiredCount, joinedCount)
-    ) as MemoryMultiplayerPlayerCount;
-    const memoryConfig =
-      gameType === 'memory-match'
-        ? MEMORY_MULTIPLAYER_CONFIGS[effectivePlayerCount]
-        : null;
+
+    const handleWaitingSettingsChange = async (nextSettings: MemoryRoomSettings) => {
+      if (!onUpdateRoomSettings || !isHost) return;
+      setIsSavingSettings(true);
+      try {
+        await onUpdateRoomSettings(nextSettings);
+      } finally {
+        setIsSavingSettings(false);
+      }
+    };
 
     return (
       <div
@@ -331,13 +354,13 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
             >
               Max {requiredCount}P · Min {minRequired}P Required
             </span>
-            {memoryConfig && (
+            {memorySettings && (
               <span
                 className="px-2.5 py-1 rounded-full bg-[#FFC66D]/15 border border-[#FFC66D]/40 text-[#FFC66D] text-xs font-semibold"
                 data-testid="waiting-room-board-preview"
               >
-                {hasMinimumPlayers ? `${joinedCount}P` : `${minRequired}P+`} Board ·{' '}
-                {memoryConfig.totalCards} Cards ({memoryConfig.matchingPairs} Pairs)
+                {memorySettings.cardCount} Cards ({getMemoryPairCount(memorySettings.cardCount)}{' '}
+                Pairs)
               </span>
             )}
           </div>
@@ -471,6 +494,22 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
           </div>
         </div>
 
+        {/* Host-Controlled Memory Match Settings (editable by host, live read-only for guests) */}
+        {memorySettings && (
+          <div className="mb-5">
+            <MemoryRoomSettingsPanel
+              settings={memorySettings}
+              canEdit={isHost && Boolean(onUpdateRoomSettings)}
+              heading={isHost ? 'Room Settings (Editable)' : 'Room Settings'}
+              lockedReason="Host Controlled"
+              joinedPlayerCount={joinedCount}
+              isSaving={isSavingSettings}
+              onChange={(next) => void handleWaitingSettingsChange(next)}
+              showLargeBoardNotice={true}
+            />
+          </div>
+        )}
+
         {/* Joined Players List */}
         <div className="mb-6">
           <h3 className="font-['Press_Start_2P'] text-[10px] text-[#FFF0D7]/70 uppercase tracking-wider mb-3">
@@ -576,6 +615,11 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Waiting Room Social: Live Reactions & Persistent Room Chat */}
+        <div className="mb-5">
+          <RoomSocialBar room={room} uid={uid} isHost={isHost} compact={true} />
         </div>
 
         {/* Host & Guest Actions */}
@@ -739,6 +783,18 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
             <AlertTriangle className="w-4 h-4 text-[#FF776E] shrink-0 mt-0.5" />
             <span>{error || localValidationError}</span>
           </div>
+          {failedReconnectRoomCode && onRetryReconnect && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void onRetryReconnect()}
+                className="px-3 py-1.5 rounded-lg bg-[#56E0CB] hover:bg-[#6eead8] text-[#171329] text-xs font-bold transition-colors cursor-pointer"
+                data-testid="retry-reconnect-btn"
+              >
+                Retry Reconnect ({failedReconnectRoomCode})
+              </button>
+            </div>
+          )}
           {(invitationStatus === 'invalid' ||
             invitationStatus === 'unavailable' ||
             Boolean(invitedRoomCode)) && (
@@ -777,49 +833,18 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
             />
           </div>
 
-          {/* Player Count Selector for Memory Match (4 Options: 2P, 3P, 4P, 5–8P) */}
+          {/* Flexible Memory Match Room Settings (Card Count 10–100 + Player Limits 2–8) */}
           {gameType === 'memory-match' && (
-            <div>
-              <label className="block font-['Press_Start_2P'] text-[10px] text-[#FFC66D] uppercase tracking-wider mb-2">
-                Select Room Capacity
-              </label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="memory-capacity-options">
-                {MEMORY_ROOM_CAPACITY_OPTIONS.map((option) => {
-                  const isSelected = selectedMaxPlayers === option.maxPlayers;
-                  return (
-                    <button
-                      key={option.maxPlayers}
-                      type="button"
-                      onClick={() => {
-                        playClick();
-                        setSelectedMaxPlayers(option.maxPlayers);
-                      }}
-                      className={`p-2.5 sm:p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-[#171329] border-[#FFC66D] shadow-[0_0_15px_rgba(255,198,109,0.2)]'
-                          : 'bg-[#171329]/60 border-[#FFF0D7]/15 hover:border-[#FFF0D7]/35'
-                      }`}
-                      data-testid={`select-players-${option.maxPlayers}`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-['Press_Start_2P'] text-xs text-[#FFF0D7]">
-                          {option.label}
-                        </span>
-                        <span className="text-[9px] text-[#FFC66D]/85 font-semibold">
-                          Min {option.minPlayersToStart}P
-                        </span>
-                      </div>
-                      <div className="text-[11px] font-bold text-[#56E0CB]">
-                        {option.totalCards} Cards
-                      </div>
-                      <div className="text-[10px] text-[#FFF0D7]/60">
-                        {option.matchingPairs} Pairs
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            <MemoryRoomSettingsPanel
+              settings={memorySettingsDraft}
+              canEdit={true}
+              heading="Configure Match Settings"
+              onChange={(next) => {
+                playClick();
+                setMemorySettingsDraft(next);
+              }}
+              showLargeBoardNotice={true}
+            />
           )}
 
           <button

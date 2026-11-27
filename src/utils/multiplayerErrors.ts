@@ -23,6 +23,7 @@ export type MultiplayerErrorCode =
   | 'INVALID_STATE_TRANSITION'
   | 'NOT_YOUR_TURN'
   | 'INVALID_MOVE'
+  | 'INVALID_ROOM_SETTINGS'
   | 'INVALID_ROOM_DATA'
   | 'UNEXPECTED_ERROR';
 
@@ -48,6 +49,7 @@ export const MULTIPLAYER_USER_MESSAGES: Readonly<Record<MultiplayerErrorCode, st
   NOT_YOUR_TURN: "That move isn't valid. Please try again.",
   NOT_HOST: 'Only the room host can perform this action.',
   NOT_ENOUGH_PLAYERS: 'Not enough players have joined to start the game yet.',
+  INVALID_ROOM_SETTINGS: 'Please choose valid room settings (10–100 even cards, 2–8 players).',
   INVALID_ROOM_DATA: 'Something went wrong. Please try again.',
   UNEXPECTED_ERROR: 'Something went wrong. Please try again.',
 } as const;
@@ -88,7 +90,14 @@ function normalizeFirebaseCode(rawCode: string): string {
  */
 export function resolveMultiplayerError(
   error: unknown,
-  context?: 'join-room' | 'create-room' | 'start-game' | 'game-action' | 'rematch' | 'subscription'
+  context?:
+    | 'join-room'
+    | 'create-room'
+    | 'start-game'
+    | 'game-action'
+    | 'rematch'
+    | 'update-settings'
+    | 'subscription'
 ): ResolvedMultiplayerError {
   if (error instanceof FirebaseConfigurationError) {
     return {
@@ -242,7 +251,14 @@ export function resolveMultiplayerError(
  */
 export function getUserFriendlyMultiplayerError(
   error: unknown,
-  context?: 'join-room' | 'create-room' | 'start-game' | 'game-action' | 'rematch' | 'subscription'
+  context?:
+    | 'join-room'
+    | 'create-room'
+    | 'start-game'
+    | 'game-action'
+    | 'rematch'
+    | 'update-settings'
+    | 'subscription'
 ): string {
   return resolveMultiplayerError(error, context).userMessage;
 }

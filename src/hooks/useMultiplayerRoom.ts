@@ -8,6 +8,8 @@ import {
   MultiplayerGameType,
   MultiplayerRoomDocument,
   MemoryMultiplayerPlayerCount,
+  MemoryRoomSettings,
+  RoomConnectionState,
   ROOM_EXPIRY_POLICIES_MS,
   isRoomExpired,
 } from '../types/multiplayer';
@@ -17,8 +19,10 @@ import {
   reconnectToMultiplayerRoom,
   leaveMultiplayerRoom,
   closeMultiplayerRoom,
+  updateMemoryRoomSettings,
   updatePlayerConnectionStatus,
   subscribeToMultiplayerRoom,
+  fetchLatestMultiplayerRoom,
   checkAndExpireRoomIfNeeded,
   shouldAcceptIncomingRoomState,
   loadActiveRoomSession,
@@ -56,6 +60,9 @@ export interface UseMultiplayerRoomResult {
   isReconnecting: boolean;
   isSynchronizing: boolean;
   isConnected: boolean;
+  connectionState: RoomConnectionState;
+  failedReconnectRoomCode: string | null;
+  retryReconnect: () => Promise<void>;
   error: string | null;
   preferredNickname: string;
   invitedRoomCode: string | null;
@@ -65,11 +72,16 @@ export interface UseMultiplayerRoomResult {
   createRoom: (params: {
     nickname: string;
     maxPlayers?: MemoryMultiplayerPlayerCount;
+    memorySettings?: Partial<MemoryRoomSettings>;
   }) => Promise<MultiplayerRoomDocument | null>;
   joinRoom: (params: {
     roomCode: string;
     nickname: string;
   }) => Promise<MultiplayerRoomDocument | null>;
+  updateRoomSettings: (
+    settings: MemoryRoomSettings
+  ) => Promise<MultiplayerRoomDocument | null>;
+  refreshRoom: () => Promise<MultiplayerRoomDocument | null>;
   syncRoom: (nextRoom: MultiplayerRoomDocument | null) => void;
   leaveRoom: () => Promise<void>;
   closeRoom: () => Promise<void>;
@@ -86,6 +98,8 @@ export function useMultiplayerRoom(
   const [isReconnecting, setIsReconnecting] = useState<boolean>(false);
   const [isSynchronizing, setIsSynchronizing] = useState<boolean>(false);
   const [isConnected, setIsConnected] = useState<boolean>(true);
+  const [failedReconnectRoomCode, setFailedReconnectRoomCode] = useState<string | null>(null);
+  const [subscriptionVersion, setSubscriptionVersion] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [preferredNickname, setPreferredNickname] = useState<string>(() =>
     loadPreferredNickname()
@@ -191,14 +205,20 @@ export function useMultiplayerRoom(
               });
               if (isMounted && reconnected) {
                 didReconnect = true;
+                setFailedReconnectRoomCode(null);
                 activeRoomCodeRef.current = reconnected.room.roomCode;
                 uidRef.current = reconnected.uid;
                 roomRef.current = reconnected.room;
                 setRoom(reconnected.room);
                 setUid(reconnected.uid);
               }
-            } catch {
-              clearActiveRoomSession(gameType);
+            } catch (reconnectErr) {
+              // Do NOT clear the saved room session on transient network errors — allow manual retry!
+              if (isMounted) {
+                setFailedReconnectRoomCode(savedRoomCode);
+                setIsConnected(false);
+                setError(getUserFriendlyMultiplayerError(reconnectErr, 'subscription'));
+              }
             } finally {
               if (isMounted) {
                 setIsReconnecting(false);
@@ -264,6 +284,46 @@ export function useMultiplayerRoom(
     };
   }, [gameType, isEnabled]);
 
+  const refreshRoom = useCallback(async (): Promise<MultiplayerRoomDocument | null> => {
+    const code = activeRoomCodeRef.current ?? roomRef.current?.roomCode;
+    if (!code) return null;
+    setIsSynchronizing(true);
+    try {
+      const latest = await fetchLatestMultiplayerRoom(code);
+      if (!latest) return null;
+      const currentUid = uidRef.current;
+      if (latest.status === 'closed' || isRoomExpired(latest, Date.now())) {
+        activeRoomCodeRef.current = null;
+        roomRef.current = null;
+        clearActiveRoomSession(gameType);
+        setRoom(null);
+        setError(
+          latest.status === 'closed'
+            ? MULTIPLAYER_USER_MESSAGES.ROOM_CLOSED
+            : MULTIPLAYER_USER_MESSAGES.ROOM_EXPIRED
+        );
+        return null;
+      }
+      if (currentUid && !(currentUid in latest.players)) {
+        return null;
+      }
+      setRoom((prev) => {
+        if (!shouldAcceptIncomingRoomState(prev, latest)) {
+          return prev;
+        }
+        roomRef.current = latest;
+        return latest;
+      });
+      setError(null);
+      return latest;
+    } catch (err) {
+      logMultiplayerDiagnostic('refreshRoom', err, { roomCode: code });
+      return null;
+    } finally {
+      setIsSynchronizing(false);
+    }
+  }, [gameType]);
+
   // Subscribe to real-time Firestore updates whenever we have an active room code.
   // Uses uidRef rather than depending on `uid` so the listener is never torn down on auth state updates.
   const currentRoomCode = room?.roomCode ?? null;
@@ -274,12 +334,19 @@ export function useMultiplayerRoom(
     }
 
     activeRoomCodeRef.current = currentRoomCode;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let isActive = true;
 
     const unsubscribe = subscribeToMultiplayerRoom(currentRoomCode, {
       onRoomChange: (nextRoom, closedOrExpiredReason, metadata) => {
+        if (!isActive) return;
         setIsSynchronizing(Boolean(metadata?.fromCache));
 
         if (!nextRoom) {
+          // Ignore transient empty cache snapshots when we already hold a valid room
+          if (metadata?.fromCache && !metadata.hasPendingWrites && roomRef.current) {
+            return;
+          }
           activeRoomCodeRef.current = null;
           roomRef.current = null;
           clearActiveRoomSession(gameType);
@@ -293,9 +360,13 @@ export function useMultiplayerRoom(
           return;
         }
 
-        // If current user was removed from waiting room
+        // Ignore stale pre-join cached snapshots (e.g. cached during invite validation right before join)
+        // so a newly joined guest is never falsely evicted before the server snapshot arrives.
         const currentUid = uidRef.current;
         if (currentUid && !(currentUid in nextRoom.players)) {
+          if (metadata?.fromCache && !metadata.hasPendingWrites) {
+            return;
+          }
           activeRoomCodeRef.current = null;
           roomRef.current = null;
           clearActiveRoomSession(gameType);
@@ -312,15 +383,29 @@ export function useMultiplayerRoom(
         });
       },
       onError: (err) => {
+        if (!isActive) return;
         logMultiplayerDiagnostic('onSnapshot', err, { roomCode: currentRoomCode });
         setError(getUserFriendlyMultiplayerError(err, 'subscription'));
+        // Automatically re-establish the listener after a brief backoff so rooms recover without refresh
+        if (!retryTimer) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            if (isActive && activeRoomCodeRef.current === currentRoomCode) {
+              setSubscriptionVersion((v) => v + 1);
+            }
+          }, 2500);
+        }
       },
     });
 
     return () => {
+      isActive = false;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
       unsubscribe();
     };
-  }, [isEnabled, currentRoomCode, gameType]);
+  }, [isEnabled, currentRoomCode, gameType, subscriptionVersion]);
 
   // Heartbeat and network listeners (avoids tab-switch thrashing and redundant writes)
   useEffect(() => {
@@ -346,12 +431,14 @@ export function useMultiplayerRoom(
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         sendHeartbeat('connected');
+        void refreshRoom();
       }
     };
 
     const handleOnline = () => {
       setIsSynchronizing(false);
       sendHeartbeat('connected');
+      void refreshRoom();
     };
     const handleOffline = () => {
       setIsSynchronizing(true);
@@ -368,7 +455,7 @@ export function useMultiplayerRoom(
       window.removeEventListener('offline', handleOffline);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [isEnabled, currentRoomCode, uid]);
+  }, [isEnabled, currentRoomCode, uid, refreshRoom]);
 
   // Local expiry watchdog so expired rooms immediately transition even without external writes
   useEffect(() => {
@@ -396,6 +483,7 @@ export function useMultiplayerRoom(
     async (params: {
       nickname: string;
       maxPlayers?: MemoryMultiplayerPlayerCount;
+      memorySettings?: Partial<MemoryRoomSettings>;
     }): Promise<MultiplayerRoomDocument | null> => {
       setIsLoading(true);
       setError(null);
@@ -404,6 +492,7 @@ export function useMultiplayerRoom(
           gameType,
           hostNickname: params.nickname,
           maxPlayers: params.maxPlayers,
+          memorySettings: params.memorySettings,
         });
         clearRoomInvitationFromUrl();
         setInvitedRoomCode(null);
@@ -440,6 +529,8 @@ export function useMultiplayerRoom(
           nickname: params.nickname,
           expectedGameType: gameType,
         });
+        clearRoomInvitationFromUrl();
+        setInvitedRoomCode(null);
         setInvitationStatus('idle');
         setInvitationRoomInfo(null);
         activeRoomCodeRef.current = result.room.roomCode;
@@ -494,7 +585,68 @@ export function useMultiplayerRoom(
     }
   }, [room?.roomCode, gameType]);
 
+  const updateRoomSettings = useCallback(
+    async (settings: MemoryRoomSettings): Promise<MultiplayerRoomDocument | null> => {
+      const code = activeRoomCodeRef.current ?? room?.roomCode;
+      if (!code) return null;
+      setError(null);
+      try {
+        const updated = await updateMemoryRoomSettings({
+          roomCode: code,
+          settings,
+        });
+        roomRef.current = updated;
+        setRoom(updated);
+        return updated;
+      } catch (err) {
+        logMultiplayerDiagnostic('updateRoomSettings', err, { roomCode: code });
+        setError(getUserFriendlyMultiplayerError(err, 'update-settings'));
+        return null;
+      }
+    },
+    [room?.roomCode]
+  );
+
+  const retryReconnect = useCallback(async (): Promise<void> => {
+    const code = failedReconnectRoomCode ?? loadActiveRoomSession(gameType);
+    if (!code) return;
+    setIsReconnecting(true);
+    setError(null);
+    try {
+      const reconnected = await reconnectToMultiplayerRoom({
+        roomCode: code,
+        expectedGameType: gameType,
+      });
+      if (reconnected) {
+        setFailedReconnectRoomCode(null);
+        setIsConnected(true);
+        activeRoomCodeRef.current = reconnected.room.roomCode;
+        uidRef.current = reconnected.uid;
+        roomRef.current = reconnected.room;
+        setRoom(reconnected.room);
+        setUid(reconnected.uid);
+      } else {
+        setFailedReconnectRoomCode(null);
+        clearActiveRoomSession(gameType);
+        setError(MULTIPLAYER_USER_MESSAGES.ROOM_EXPIRED);
+      }
+    } catch (err) {
+      logMultiplayerDiagnostic('retryReconnect', err, { roomCode: code });
+      setIsConnected(false);
+      setError(getUserFriendlyMultiplayerError(err, 'subscription'));
+    } finally {
+      setIsReconnecting(false);
+    }
+  }, [failedReconnectRoomCode, gameType]);
+
   const isHost = Boolean(room && uid && room.hostUid === uid);
+  const connectionState: RoomConnectionState = isReconnecting
+    ? 'reconnecting'
+    : !isConnected
+    ? 'disconnected'
+    : isLoading || isSynchronizing
+    ? 'connecting'
+    : 'connected';
 
   return {
     room,
@@ -504,6 +656,9 @@ export function useMultiplayerRoom(
     isReconnecting,
     isSynchronizing,
     isConnected,
+    connectionState,
+    failedReconnectRoomCode,
+    retryReconnect,
     error,
     preferredNickname,
     invitedRoomCode,
@@ -512,6 +667,8 @@ export function useMultiplayerRoom(
     dismissInvitation,
     createRoom,
     joinRoom,
+    updateRoomSettings,
+    refreshRoom,
     syncRoom,
     leaveRoom,
     closeRoom,

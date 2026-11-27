@@ -9,9 +9,10 @@ import {
   RoomPlayer,
   RoomStatus,
   MemoryMultiplayerPlayerCount,
-  MEMORY_MULTIPLAYER_CONFIGS,
+  MemoryRoomSettings,
+  DEFAULT_MEMORY_ROOM_SETTINGS,
   ROOM_EXPIRY_POLICIES_MS,
-  getMinimumPlayersToStart,
+  getRoomMinimumPlayers,
   computeRoomExpiresAt,
   isRoomExpired,
   isValidRoomStateTransition,
@@ -39,6 +40,7 @@ import {
 import {
   validateRoomCreationInput,
   validateRoomJoinInput,
+  validateMemoryRoomSettingsInput,
   parseFirestoreRoomDocument,
 } from '../schemas/multiplayerSchemas';
 
@@ -121,7 +123,8 @@ export function buildInitialRoomDocument(params: {
   gameType: MultiplayerGameType;
   hostUid: string;
   hostNickname: string;
-  maxPlayers?: MemoryMultiplayerPlayerCount;
+  maxPlayers?: MemoryMultiplayerPlayerCount | number;
+  memorySettings?: Partial<MemoryRoomSettings>;
   nowMs?: number;
 }): MultiplayerRoomDocument {
   const nowMs = params.nowMs ?? Date.now();
@@ -142,19 +145,25 @@ export function buildInitialRoomDocument(params: {
     );
   }
 
-  const maxPlayers =
-    params.gameType === 'tic-tac-toe'
-      ? 2
-      : (params.maxPlayers ?? 2);
+  let maxPlayers = 2;
+  let memoryRoomSettings: MemoryRoomSettings | null = null;
 
-  if (
-    params.gameType === 'memory-match' &&
-    !(maxPlayers in MEMORY_MULTIPLAYER_CONFIGS)
-  ) {
-    throw new MultiplayerRoomError(
-      'INVALID_STATE_TRANSITION',
-      'Memory Match rooms must be configured for 2 to 8 players.'
-    );
+  if (params.gameType === 'memory-match') {
+    const resolvedMax =
+      params.memorySettings?.maxPlayers ??
+      params.maxPlayers ??
+      DEFAULT_MEMORY_ROOM_SETTINGS.maxPlayers;
+    const candidateSettings: MemoryRoomSettings = {
+      cardCount:
+        params.memorySettings?.cardCount ?? DEFAULT_MEMORY_ROOM_SETTINGS.cardCount,
+      minPlayers:
+        params.memorySettings?.minPlayers ??
+        Math.min(DEFAULT_MEMORY_ROOM_SETTINGS.minPlayers, resolvedMax),
+      maxPlayers: resolvedMax,
+    };
+    const validatedSettings = validateMemoryRoomSettingsInput(candidateSettings);
+    memoryRoomSettings = validatedSettings;
+    maxPlayers = validatedSettings.maxPlayers;
   }
 
   const hostPlayer: RoomPlayer = {
@@ -187,6 +196,7 @@ export function buildInitialRoomDocument(params: {
     expiresAt: computeRoomExpiresAt('waiting', nowMs),
     ticTacToeState: null,
     memoryMatchState: null,
+    memoryRoomSettings,
   };
 }
 
@@ -351,7 +361,7 @@ export function validateHostCanStartGame(
       `Cannot start game from room status "${room.status}".`
     );
   }
-  const minPlayers = getMinimumPlayersToStart(room.maxPlayers, room.gameType);
+  const minPlayers = getRoomMinimumPlayers(room);
   if (room.playerOrder.length < minPlayers) {
     throw new MultiplayerRoomError(
       'NOT_ENOUGH_PLAYERS',
@@ -481,12 +491,103 @@ export function applyPlayerLeaveOrClose(params: {
 }
 
 /**
+ * Pure host-only state reducer for updating Memory Match room settings.
+ * Permitted ONLY while the room is `waiting` or `completed` (locked during `in_progress`).
+ * Updates persistent `memoryRoomSettings` and `maxPlayers` without altering any active/completed `memoryMatchState`.
+ */
+export function applyUpdateMemoryRoomSettings(params: {
+  room: MultiplayerRoomDocument;
+  callerUid: string;
+  settings: MemoryRoomSettings;
+  nowMs?: number;
+}): MultiplayerRoomDocument {
+  const { room, callerUid, settings } = params;
+  const nowMs = params.nowMs ?? Date.now();
+
+  if (room.gameType !== 'memory-match') {
+    throw new MultiplayerRoomError(
+      'INVALID_STATE_TRANSITION',
+      'Room settings can only be configured for Memory Match rooms.'
+    );
+  }
+  if (room.status === 'closed') {
+    throw new MultiplayerRoomError('ROOM_CLOSED', 'This room is closed.');
+  }
+  if (isRoomExpired(room, nowMs)) {
+    throw new MultiplayerRoomError('ROOM_EXPIRED', 'This room has expired.');
+  }
+  if (room.hostUid !== callerUid) {
+    throw new MultiplayerRoomError('NOT_HOST', 'Only the room host can update room settings.');
+  }
+  if (room.status !== 'waiting' && room.status !== 'completed') {
+    throw new MultiplayerRoomError(
+      'INVALID_STATE_TRANSITION',
+      'Room settings are locked while a match is in progress.'
+    );
+  }
+
+  const validated = validateMemoryRoomSettingsInput(settings, room.playerOrder.length);
+
+  return {
+    ...room,
+    maxPlayers: validated.maxPlayers,
+    memoryRoomSettings: validated,
+    lastActivityAt: nowMs,
+    expiresAt: computeRoomExpiresAt(room.status, nowMs),
+  };
+}
+
+/**
+ * Firestore transaction: Host updates Memory Match room settings (waiting or completed only).
+ */
+export async function updateMemoryRoomSettings(params: {
+  roomCode: string;
+  settings: MemoryRoomSettings;
+}): Promise<MultiplayerRoomDocument> {
+  const normalizedCode = normalizeRoomCode(params.roomCode);
+  if (!isValidRoomCodeFormat(normalizedCode)) {
+    throw new MultiplayerRoomError('INVALID_ROOM_CODE', MULTIPLAYER_USER_MESSAGES.INVALID_ROOM_CODE);
+  }
+
+  const validatedInput = validateMemoryRoomSettingsInput(params.settings);
+  const user = await ensureAnonymousSession();
+  const roomRef = getDocRef<MultiplayerRoomDocument>(ROOMS_COLLECTION, normalizedCode);
+
+  return runFirestoreTransaction(async (transaction) => {
+    const snap = await transaction.get(roomRef);
+    if (!snap.exists()) {
+      throw new MultiplayerRoomError('ROOM_NOT_FOUND', MULTIPLAYER_USER_MESSAGES.ROOM_NOT_FOUND);
+    }
+
+    const nextRoom = applyUpdateMemoryRoomSettings({
+      room: snap.data(),
+      callerUid: user.uid,
+      settings: validatedInput,
+      nowMs: Date.now(),
+    });
+
+    if (typeof transaction.update === 'function') {
+      transaction.update(roomRef, {
+        maxPlayers: nextRoom.maxPlayers,
+        memoryRoomSettings: nextRoom.memoryRoomSettings,
+        lastActivityAt: nextRoom.lastActivityAt,
+        expiresAt: nextRoom.expiresAt,
+      });
+    } else {
+      transaction.set(roomRef, nextRoom);
+    }
+    return nextRoom;
+  });
+}
+
+/**
  * Creates a new multiplayer room in Firestore with collision checking.
  */
 export async function createMultiplayerRoom(params: {
   gameType: MultiplayerGameType;
   hostNickname: string;
-  maxPlayers?: MemoryMultiplayerPlayerCount;
+  maxPlayers?: MemoryMultiplayerPlayerCount | number;
+  memorySettings?: Partial<MemoryRoomSettings>;
 }): Promise<{ room: MultiplayerRoomDocument; uid: string }> {
   const validated = validateRoomCreationInput(params);
   const user = await ensureAnonymousSession();
@@ -515,6 +616,7 @@ export async function createMultiplayerRoom(params: {
           hostUid: uid,
           hostNickname: validated.hostNickname,
           maxPlayers: validated.maxPlayers,
+          memorySettings: validated.memorySettings ?? undefined,
           nowMs,
         });
 
@@ -927,6 +1029,15 @@ export function shouldAcceptIncomingRoomState(
     return false;
   }
 
+  // Within the same Memory Match round, never regress turnSequence when both are present
+  if (
+    currentRoom.memoryMatchState?.turnSequence !== undefined &&
+    incomingRoom.memoryMatchState?.turnSequence !== undefined &&
+    incomingRoom.memoryMatchState.turnSequence < currentRoom.memoryMatchState.turnSequence
+  ) {
+    return false;
+  }
+
   // Do not replace fresher state with an older cached snapshot
   if (
     metadata?.fromCache &&
@@ -937,6 +1048,29 @@ export function shouldAcceptIncomingRoomState(
   }
 
   return true;
+}
+
+/**
+ * Fetches the latest authoritative room document directly from Firestore for recovery
+ * after a transient network interruption or incomplete hydration.
+ */
+export async function fetchLatestMultiplayerRoom(
+  roomCode: string
+): Promise<MultiplayerRoomDocument | null> {
+  const normalizedCode = normalizeRoomCode(roomCode);
+  if (!isValidRoomCodeFormat(normalizedCode)) return null;
+  const rawRoom = await fetchDocument<MultiplayerRoomDocument>(ROOMS_COLLECTION, normalizedCode);
+  if (!rawRoom) return null;
+  const validated = parseFirestoreRoomDocument(rawRoom, normalizedCode) ?? rawRoom;
+  if (
+    !validated ||
+    typeof validated !== 'object' ||
+    !validated.players ||
+    !Array.isArray(validated.playerOrder)
+  ) {
+    return null;
+  }
+  return validated;
 }
 
 /**
@@ -1008,8 +1142,17 @@ export function subscribeToMultiplayerRoom(
               turnOrderUids: [...validated.memoryMatchState.turnOrderUids],
               flippedCardIds: [...validated.memoryMatchState.flippedCardIds],
               winnerUids: [...validated.memoryMatchState.winnerUids],
+              matchSettings: validated.memoryMatchState.matchSettings
+                ? { ...validated.memoryMatchState.matchSettings }
+                : undefined,
+              lastSkippedTurn: validated.memoryMatchState.lastSkippedTurn
+                ? { ...validated.memoryMatchState.lastSkippedTurn }
+                : null,
             }
           : null,
+        memoryRoomSettings: validated.memoryRoomSettings
+          ? { ...validated.memoryRoomSettings }
+          : validated.memoryRoomSettings,
       };
 
       callbacks.onRoomChange(freshRoom, undefined, latestMetadata);
@@ -1035,34 +1178,97 @@ function getSessionStorage(): Storage | null {
   return null;
 }
 
-export function saveActiveRoomSession(gameType: MultiplayerGameType, roomCode: string): void {
-  const storage = getSessionStorage();
-  if (!storage) return;
+function getLocalStorage(): Storage | null {
   try {
-    storage.setItem(`${ACTIVE_ROOM_KEY_PREFIX}${gameType}`, normalizeRoomCode(roomCode));
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return window.localStorage;
+    }
+  } catch {
+    // ignore storage access errors
+  }
+  return null;
+}
+
+const ACTIVE_SESSION_MAX_AGE_MS = ROOM_EXPIRY_POLICIES_MS.INTERRUPTED_INACTIVITY_MS;
+
+export function saveActiveRoomSession(gameType: MultiplayerGameType, roomCode: string): void {
+  const normalized = normalizeRoomCode(roomCode);
+  const key = `${ACTIVE_ROOM_KEY_PREFIX}${gameType}`;
+  try {
+    getSessionStorage()?.setItem(key, normalized);
+  } catch {
+    // ignore
+  }
+  try {
+    getLocalStorage()?.setItem(
+      key,
+      JSON.stringify({ roomCode: normalized, savedAt: Date.now() })
+    );
   } catch {
     // ignore
   }
 }
 
 export function loadActiveRoomSession(gameType: MultiplayerGameType): string | null {
-  const storage = getSessionStorage();
-  if (!storage) return null;
+  const key = `${ACTIVE_ROOM_KEY_PREFIX}${gameType}`;
   try {
-    return storage.getItem(`${ACTIVE_ROOM_KEY_PREFIX}${gameType}`);
-  } catch {
-    return null;
-  }
-}
-
-export function clearActiveRoomSession(gameType: MultiplayerGameType): void {
-  const storage = getSessionStorage();
-  if (!storage) return;
-  try {
-    storage.removeItem(`${ACTIVE_ROOM_KEY_PREFIX}${gameType}`);
+    const rawSession = getSessionStorage()?.getItem(key);
+    if (rawSession && isValidRoomCodeFormat(rawSession)) {
+      return normalizeRoomCode(rawSession);
+    }
   } catch {
     // ignore
   }
+  try {
+    const rawLocal = getLocalStorage()?.getItem(key);
+    if (!rawLocal) return null;
+    try {
+      const parsed = JSON.parse(rawLocal) as { roomCode?: unknown; savedAt?: unknown };
+      if (
+        typeof parsed.roomCode === 'string' &&
+        isValidRoomCodeFormat(parsed.roomCode) &&
+        typeof parsed.savedAt === 'number' &&
+        Date.now() - parsed.savedAt <= ACTIVE_SESSION_MAX_AGE_MS
+      ) {
+        return normalizeRoomCode(parsed.roomCode);
+      }
+    } catch {
+      if (isValidRoomCodeFormat(rawLocal)) {
+        return normalizeRoomCode(rawLocal);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export function clearActiveRoomSession(gameType: MultiplayerGameType): void {
+  const key = `${ACTIVE_ROOM_KEY_PREFIX}${gameType}`;
+  try {
+    getSessionStorage()?.removeItem(key);
+  } catch {
+    // ignore
+  }
+  try {
+    getLocalStorage()?.removeItem(key);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Detects if the browser has an active persisted multiplayer room session so
+ * refreshing the page restores the user directly back into their active game.
+ */
+export function detectActiveRoomSessionGameType(): MultiplayerGameType | null {
+  if (loadActiveRoomSession('memory-match')) {
+    return 'memory-match';
+  }
+  if (loadActiveRoomSession('tic-tac-toe')) {
+    return 'tic-tac-toe';
+  }
+  return null;
 }
 
 export function savePreferredNickname(nickname: string): void {

@@ -104,3 +104,58 @@ body {
   outline: 2px solid #56E0CB;
   outline-offset: 3px;
 }
+
+/* Custom Pixel Afterglow floating reaction animation */
+@keyframes arcade-reaction-float {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.65);
+  }
+  16% {
+    opacity: 1;
+    transform: translateY(0px) scale(1.08);
+  }
+  28% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1);
+  }
+  80% {
+    opacity: 1;
+    transform: translateY(-16px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-30px) scale(0.9);
+  }
+}
+
+.animate-arcade-reaction {
+  animation: arcade-reaction-float 3.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: transform, opacity;
+}
+
+
+/* Subtle Pixel Afterglow dark-purple & turquoise scrollbar for internal scroll regions */
+.arcade-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(86, 224, 203, 0.45) rgba(23, 19, 41, 0.55);
+}
+
+.arcade-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.arcade-scrollbar::-webkit-scrollbar-track {
+  background: rgba(23, 19, 41, 0.55);
+  border-radius: 9999px;
+}
+
+.arcade-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(86, 224, 203, 0.4);
+  border-radius: 9999px;
+}
+
+.arcade-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(86, 224, 203, 0.7);
+}

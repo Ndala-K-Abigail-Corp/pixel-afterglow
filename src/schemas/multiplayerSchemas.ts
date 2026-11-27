@@ -5,10 +5,18 @@
 
 import { z } from 'zod';
 import {
-  MEMORY_MULTIPLAYER_CONFIGS,
+  MEMORY_MIN_CARD_COUNT,
+  MEMORY_MAX_CARD_COUNT,
+  MEMORY_CARD_COUNT_STEP,
+  MEMORY_MIN_PLAYER_LIMIT,
+  MEMORY_MAX_PLAYER_LIMIT,
+  DEFAULT_MEMORY_ROOM_SETTINGS,
+  ALLOWED_REACTION_EMOJIS,
+  CHAT_MESSAGE_MAX_LENGTH,
+  type MemoryRoomSettings,
   type MultiplayerRoomDocument,
-  type MemoryMultiplayerPlayerCount,
   type MultiplayerGameType,
+  type ReactionEmoji,
 } from '../types/multiplayer';
 import { MultiplayerRoomError } from '../utils/multiplayerErrors';
 
@@ -75,24 +83,38 @@ export const MemoryPlayerCapacitySchema = z.union([
   z.literal(8),
 ]);
 
-export const MemorySelectableRoomCapacitySchema = z.union([
-  z.literal(2),
-  z.literal(3),
-  z.literal(4),
-  z.literal(8),
-]);
-
 export const RoomCapacitySchema = z.number().int().min(2).max(8);
 
 /**
- * 6. Game Configuration Schema (Memory Match board config per player count):
+ * 6. Memory Match Room Settings Schema (board size independent of player count):
+ * - cardCount: integer 10–100, divisible by 2
+ * - minPlayers / maxPlayers: integers 2–8, minPlayers <= maxPlayers
  */
-export const GameConfigurationSchema = z.object({
-  maxPlayers: MemoryPlayerCapacitySchema,
-  minPlayersToStart: z.union([z.literal(2), z.literal(3)]),
-  totalCards: z.union([z.literal(20), z.literal(40), z.literal(60), z.literal(100)]),
-  matchingPairs: z.union([z.literal(10), z.literal(20), z.literal(30), z.literal(50)]),
-});
+export const MemoryCardCountSchema = z
+  .number()
+  .int('Card count must be a whole number.')
+  .min(MEMORY_MIN_CARD_COUNT, `Card count must be at least ${MEMORY_MIN_CARD_COUNT}.`)
+  .max(MEMORY_MAX_CARD_COUNT, `Card count cannot exceed ${MEMORY_MAX_CARD_COUNT}.`)
+  .refine((n) => n % MEMORY_CARD_COUNT_STEP === 0, {
+    message: 'Card count must be an even number.',
+  });
+
+export const MemoryPlayerLimitSchema = z
+  .number()
+  .int()
+  .min(MEMORY_MIN_PLAYER_LIMIT, `Player limits must be at least ${MEMORY_MIN_PLAYER_LIMIT}.`)
+  .max(MEMORY_MAX_PLAYER_LIMIT, `Player limits cannot exceed ${MEMORY_MAX_PLAYER_LIMIT}.`);
+
+export const MemoryRoomSettingsSchema = z
+  .object({
+    cardCount: MemoryCardCountSchema,
+    minPlayers: MemoryPlayerLimitSchema,
+    maxPlayers: MemoryPlayerLimitSchema,
+  })
+  .refine((s) => s.minPlayers <= s.maxPlayers, {
+    message: 'Minimum players cannot exceed maximum players.',
+    path: ['minPlayers'],
+  });
 
 /**
  * 7. Room Creation & Join Request Schemas:
@@ -102,22 +124,47 @@ export const RoomCreationRequestSchema = z
     gameType: MultiplayerGameTypeSchema,
     hostNickname: PlayerNicknameSchema,
     maxPlayers: RoomCapacitySchema.optional(),
+    memorySettings: z
+      .object({
+        cardCount: z.number().optional(),
+        minPlayers: z.number().optional(),
+        maxPlayers: z.number().optional(),
+      })
+      .optional(),
   })
-  .transform((val) => ({
-    gameType: val.gameType,
-    hostNickname: val.hostNickname,
-    maxPlayers: (val.gameType === 'tic-tac-toe'
-      ? 2
-      : (val.maxPlayers ?? 2)) as MemoryMultiplayerPlayerCount,
-  }))
+  .transform((val) => {
+    if (val.gameType === 'tic-tac-toe') {
+      return {
+        gameType: val.gameType,
+        hostNickname: val.hostNickname,
+        maxPlayers: 2,
+        memorySettings: null as MemoryRoomSettings | null,
+      };
+    }
+    const maxPlayers =
+      val.memorySettings?.maxPlayers ?? val.maxPlayers ?? DEFAULT_MEMORY_ROOM_SETTINGS.maxPlayers;
+    const memorySettings = {
+      cardCount: val.memorySettings?.cardCount ?? DEFAULT_MEMORY_ROOM_SETTINGS.cardCount,
+      minPlayers:
+        val.memorySettings?.minPlayers ??
+        Math.min(DEFAULT_MEMORY_ROOM_SETTINGS.minPlayers, maxPlayers),
+      maxPlayers,
+    };
+    return {
+      gameType: val.gameType,
+      hostNickname: val.hostNickname,
+      maxPlayers,
+      memorySettings: memorySettings as MemoryRoomSettings | null,
+    };
+  })
   .refine(
     (val) =>
       val.gameType === 'tic-tac-toe'
         ? val.maxPlayers === 2
-        : val.maxPlayers in MEMORY_MULTIPLAYER_CONFIGS,
+        : MemoryRoomSettingsSchema.safeParse(val.memorySettings).success,
     {
-      message: 'Invalid room player capacity for the selected game.',
-      path: ['maxPlayers'],
+      message: 'Invalid room settings for the selected game.',
+      path: ['memorySettings'],
     }
   );
 
@@ -213,14 +260,13 @@ export const MemoryMatchBoardStateSchema = z
   .object({
     cards: z.array(MultiplayerMemoryCardSchema).refine(
       (cards) =>
-        cards.length === 20 ||
-        cards.length === 40 ||
-        cards.length === 60 ||
-        cards.length === 100,
-      { message: 'Memory Match board must have 20, 40, 60, or 100 cards.' }
+        cards.length >= MEMORY_MIN_CARD_COUNT &&
+        cards.length <= MEMORY_MAX_CARD_COUNT &&
+        cards.length % 2 === 0,
+      { message: 'Memory Match board must have an even number of cards between 10 and 100.' }
     ),
-    totalPairs: z.union([z.literal(10), z.literal(20), z.literal(30), z.literal(50)]),
-    matchedPairs: z.number().int().min(0).max(50),
+    totalPairs: z.number().int().min(MEMORY_MIN_CARD_COUNT / 2).max(MEMORY_MAX_CARD_COUNT / 2),
+    matchedPairs: z.number().int().min(0).max(MEMORY_MAX_CARD_COUNT / 2),
     roundNumber: z.number().int().min(1).optional(),
     matchedByPairKey: MatchedCardOwnershipSchema.optional(),
     lastMatchedPairKey: CardSymbolIdSchema.nullable().optional(),
@@ -231,9 +277,27 @@ export const MemoryMatchBoardStateSchema = z
     pendingResetAt: z.number().nullable(),
     winnerUids: z.array(PlayerIdentitySchema),
     isTie: z.boolean(),
+    matchSettings: MemoryRoomSettingsSchema.optional(),
+    turnSequence: z.number().int().min(0).optional(),
+    turnStartedAt: z.number().nonnegative().optional(),
+    lastSkippedTurn: z
+      .object({
+        skippedUid: PlayerIdentitySchema,
+        skippedNickname: z.string().min(1).max(32),
+        skippedByUid: PlayerIdentitySchema,
+        skippedByNickname: z.string().min(1).max(32),
+        roundNumber: z.number().int().min(1),
+        turnSequence: z.number().int().min(1),
+        skippedAt: z.number().nonnegative(),
+      })
+      .nullable()
+      .optional(),
   })
   .refine((mm) => mm.cards.length === mm.totalPairs * 2, {
     message: 'Memory Match card count must equal totalPairs * 2.',
+  })
+  .refine((mm) => !mm.matchSettings || mm.matchSettings.cardCount === mm.cards.length, {
+    message: 'Active match settings must describe the dealt board.',
   })
   .refine((mm) => mm.matchedPairs <= mm.totalPairs, {
     message: 'matchedPairs cannot exceed totalPairs.',
@@ -288,7 +352,17 @@ export const MultiplayerRoomDocumentSchema = z
     expiresAt: z.number().nonnegative(),
     ticTacToeState: TicTacToeMultiplayerStateSchema.nullable(),
     memoryMatchState: MemoryMatchBoardStateSchema.nullable(),
+    memoryRoomSettings: MemoryRoomSettingsSchema.nullable().optional(),
   })
+  .refine(
+    (doc) =>
+      doc.gameType !== 'memory-match' ||
+      !doc.memoryRoomSettings ||
+      doc.memoryRoomSettings.maxPlayers === doc.maxPlayers,
+    {
+      message: 'Room capacity must mirror the configured maximum players.',
+    }
+  )
   .refine(
     (doc) => {
       if (doc.status === 'expired' && doc.playerOrder.length === 0) {
@@ -309,6 +383,31 @@ export type ValidatedRoomJoinRequest = z.infer<typeof RoomJoinRequestSchema>;
 export type ValidatedMultiplayerRoomDocument = z.infer<typeof MultiplayerRoomDocumentSchema>;
 
 /**
+ * Validates host-submitted Memory Match room settings before any Firebase call.
+ * When `joinedPlayerCount` is provided, the maximum cannot drop below current membership.
+ * Throws a user-friendly MultiplayerRoomError on invalid input.
+ */
+export function validateMemoryRoomSettingsInput(
+  input: unknown,
+  joinedPlayerCount?: number
+): MemoryRoomSettings {
+  const parsed = MemoryRoomSettingsSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new MultiplayerRoomError(
+      'INVALID_ROOM_SETTINGS',
+      parsed.error.issues[0]?.message ?? 'Invalid room settings.'
+    );
+  }
+  if (joinedPlayerCount !== undefined && parsed.data.maxPlayers < joinedPlayerCount) {
+    throw new MultiplayerRoomError(
+      'INVALID_ROOM_SETTINGS',
+      `Maximum players cannot be lower than the ${joinedPlayerCount} players already in the room.`
+    );
+  }
+  return parsed.data;
+}
+
+/**
  * Validates room creation input before any Firebase call.
  * Throws a user-friendly MultiplayerRoomError on invalid input.
  */
@@ -316,6 +415,7 @@ export function validateRoomCreationInput(input: {
   gameType: MultiplayerGameType;
   hostNickname: string;
   maxPlayers?: number;
+  memorySettings?: Partial<MemoryRoomSettings>;
 }): ValidatedRoomCreationRequest {
   const parsed = RoomCreationRequestSchema.safeParse(input);
   if (!parsed.success) {
@@ -325,6 +425,12 @@ export function validateRoomCreationInput(input: {
       throw new MultiplayerRoomError(
         'INVALID_NICKNAME',
         'Nickname must be between 2 and 16 characters.'
+      );
+    }
+    if (path.includes('memorySettings')) {
+      throw new MultiplayerRoomError(
+        'INVALID_ROOM_SETTINGS',
+        firstIssue?.message ?? 'Invalid room settings.'
       );
     }
     throw new MultiplayerRoomError(
@@ -392,4 +498,74 @@ export function parseFirestoreRoomDocument(
   }
 
   return parsed.data as MultiplayerRoomDocument;
+}
+
+/**
+ * 16. Real-Time Reactions & Room Chat Schemas:
+ */
+export const ReactionEmojiSchema = z.enum(ALLOWED_REACTION_EMOJIS);
+
+export const RoomReactionSchema = z.object({
+  id: z.string().min(1).max(128),
+  roomCode: RoomCodeSchema,
+  uid: PlayerIdentitySchema,
+  nickname: z.string().min(1).max(32),
+  emoji: ReactionEmojiSchema,
+  createdAt: z.number().nonnegative(),
+});
+
+/**
+ * Strips control characters, collapses excessive whitespace, and trims chat input.
+ * React renders text nodes safely without HTML interpretation, and stripping control chars
+ * prevents spoofing / layout corruption.
+ */
+export function sanitizeChatMessageText(raw: string): string {
+  let cleaned = '';
+  for (let i = 0; i < raw.length; i++) {
+    const code = raw.charCodeAt(i);
+    if ((code >= 0 && code <= 31) || code === 127) {
+      cleaned += ' ';
+    } else {
+      cleaned += raw[i];
+    }
+  }
+  return cleaned.replace(/\s+/g, ' ').trim();
+}
+
+export const ChatMessageTextSchema = z
+  .string()
+  .transform(sanitizeChatMessageText)
+  .refine((val) => val.length >= 1, {
+    message: 'Message cannot be empty.',
+  })
+  .refine((val) => val.length <= CHAT_MESSAGE_MAX_LENGTH, {
+    message: `Message cannot exceed ${CHAT_MESSAGE_MAX_LENGTH} characters.`,
+  });
+
+export const RoomChatMessageSchema = z.object({
+  id: z.string().min(1).max(128),
+  roomCode: RoomCodeSchema,
+  uid: PlayerIdentitySchema,
+  nickname: z.string().min(1).max(32),
+  text: z.string().min(1).max(CHAT_MESSAGE_MAX_LENGTH),
+  createdAt: z.number().nonnegative(),
+});
+
+export function validateReactionInput(emoji: unknown): ReactionEmoji {
+  const parsed = ReactionEmojiSchema.safeParse(emoji);
+  if (!parsed.success) {
+    throw new MultiplayerRoomError('INVALID_MOVE', 'Invalid reaction emoji.');
+  }
+  return parsed.data;
+}
+
+export function validateChatMessageInput(rawText: unknown): string {
+  const parsed = ChatMessageTextSchema.safeParse(rawText);
+  if (!parsed.success) {
+    throw new MultiplayerRoomError(
+      'INVALID_MOVE',
+      parsed.error.issues[0]?.message ?? 'Invalid chat message.'
+    );
+  }
+  return parsed.data;
 }

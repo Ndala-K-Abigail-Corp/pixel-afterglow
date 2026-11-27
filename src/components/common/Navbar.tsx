@@ -4,26 +4,34 @@
  */
 
 import React from 'react';
-import { Volume2, VolumeX, Gamepad2, Info } from 'lucide-react';
+import { Volume2, VolumeX, Gamepad2, Info, UserCircle2, DoorOpen } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
+import { useAuth } from '../../context/AuthContext';
+import { getCountryByCode } from '../../data/countries';
 import { PWAInstallButton } from './PWAInstallButton';
 
-export type AppView = 'home' | 'game-tic-tac-toe' | 'game-memory-match';
+export type AppView = 'home' | 'arcade-rooms' | 'game-tic-tac-toe' | 'game-memory-match';
 
 interface NavbarProps {
   currentView: AppView;
   onNavigateHome: () => void;
   onOpenGames: () => void;
+  onOpenArcadeRooms?: () => void;
   onOpenAbout: () => void;
+  onOpenAuth?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   currentView,
   onNavigateHome,
   onOpenGames,
+  onOpenArcadeRooms,
   onOpenAbout,
+  onOpenAuth,
 }) => {
   const { isMuted, toggleMute } = useAudio();
+  const { profile, isSignedInAccount } = useAuth();
+  const country = profile ? getCountryByCode(profile.countryCode) : null;
 
   return (
     <header className="sticky top-0 z-40 w-full bg-[#171329]/95 backdrop-blur-md border-b border-[#292342] px-3 sm:px-6 md:px-8 py-2.5 sm:py-3.5 transition-colors">
@@ -63,20 +71,38 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Games link */}
           <button
             onClick={onOpenGames}
-            className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium transition-colors ${
+            className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium transition-colors cursor-pointer ${
               currentView === 'home'
                 ? 'text-[#FFF0D7] hover:text-[#56E0CB] hover:bg-[#292342]'
                 : 'text-[#FFF0D7] hover:text-[#56E0CB] bg-[#292342]/60 hover:bg-[#292342]'
             }`}
           >
             <Gamepad2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#56E0CB] shrink-0" />
-            <span>Games</span>
+            <span className="hidden xs:inline sm:inline">Games</span>
           </button>
+
+          {/* Persistent Arcade Rooms link */}
+          {onOpenArcadeRooms && (
+            <button
+              type="button"
+              onClick={onOpenArcadeRooms}
+              data-testid="navbar-arcade-rooms-btn"
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium transition-colors cursor-pointer ${
+                currentView === 'arcade-rooms'
+                  ? 'bg-[#56E0CB]/20 text-[#56E0CB] border border-[#56E0CB]/60'
+                  : 'text-[#FFF0D7] hover:text-[#56E0CB] hover:bg-[#292342]'
+              }`}
+              aria-label="Open Persistent Arcade Rooms"
+            >
+              <DoorOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#56E0CB] shrink-0" />
+              <span className="hidden md:inline">Rooms</span>
+            </button>
+          )}
 
           {/* About link */}
           <button
             onClick={onOpenAbout}
-            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium text-[#FFF0D7] hover:text-[#FFC66D] hover:bg-[#292342] transition-colors"
+            className="hidden sm:flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium text-[#FFF0D7] hover:text-[#FFC66D] hover:bg-[#292342] transition-colors cursor-pointer"
           >
             <Info className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#FFC66D] shrink-0" />
             <span>About</span>
@@ -84,6 +110,33 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* PWA Install Button */}
           <PWAInstallButton />
+
+          {/* Account / Profile Button */}
+          {onOpenAuth && (
+            <button
+              type="button"
+              onClick={onOpenAuth}
+              data-testid="navbar-account-btn"
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold border transition-colors cursor-pointer ${
+                isSignedInAccount && profile
+                  ? 'bg-[#FFC66D]/15 text-[#FFC66D] border-[#FFC66D]/50 hover:bg-[#FFC66D]/25'
+                  : 'bg-[#292342] text-[#FFF0D7] border-[#3D345F] hover:border-[#56E0CB] hover:text-[#56E0CB]'
+              }`}
+              aria-label={isSignedInAccount && profile ? `Open profile for ${profile.username}` : 'Sign in or create account'}
+            >
+              {isSignedInAccount && profile ? (
+                <>
+                  <span aria-hidden="true">{country?.flag ?? '🎮'}</span>
+                  <span className="hidden sm:inline max-w-[90px] truncate">{profile.username}</span>
+                </>
+              ) : (
+                <>
+                  <UserCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#FFC66D] shrink-0" />
+                  <span className="hidden sm:inline">Sign In</span>
+                </>
+              )}
+            </button>
+          )}
 
           {/* Sound Mute/Unmute Toggle Button */}
           <button

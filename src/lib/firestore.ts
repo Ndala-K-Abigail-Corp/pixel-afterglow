@@ -10,6 +10,10 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  addDoc,
+  query,
+  orderBy,
+  limit,
   onSnapshot,
   runTransaction,
   serverTimestamp,
@@ -231,4 +235,87 @@ export async function runFirestoreTransaction<T>(
  */
 export function getServerTimestamp(): FieldValue {
   return serverTimestamp();
+}
+
+/**
+ * Returns a typed reference to a subcollection under a parent document
+ * (e.g. `rooms/{roomCode}/messages` or `rooms/{roomCode}/reactions`).
+ */
+export function getSubcollectionRef<T = DocumentData>(
+  parentCollection: string,
+  parentDocId: string,
+  subcollectionName: string
+): CollectionReference<T> {
+  return collection(
+    getFirestoreDb(),
+    parentCollection,
+    parentDocId,
+    subcollectionName
+  ) as CollectionReference<T>;
+}
+
+/**
+ * Appends a document to a subcollection and returns the generated document ID.
+ */
+export async function addSubcollectionDocument<T extends DocumentData>(
+  parentCollection: string,
+  parentDocId: string,
+  subcollectionName: string,
+  data: WithFieldValue<T>
+): Promise<string> {
+  const ref = getSubcollectionRef<T>(parentCollection, parentDocId, subcollectionName);
+  const docRef = await addDoc(ref, data);
+  return docRef.id;
+}
+
+/**
+ * Deletes a document from a subcollection (e.g. host moderating a chat message).
+ */
+export async function deleteSubcollectionDocument(
+  parentCollection: string,
+  parentDocId: string,
+  subcollectionName: string,
+  docId: string
+): Promise<void> {
+  const ref = doc(getFirestoreDb(), parentCollection, parentDocId, subcollectionName, docId);
+  await deleteDoc(ref);
+}
+
+/**
+ * Subscribes to an ordered, bounded real-time subcollection stream.
+ */
+export function subscribeToSubcollection<T = DocumentData>(
+  parentCollection: string,
+  parentDocId: string,
+  subcollectionName: string,
+  options: {
+    orderByField: string;
+    direction?: 'asc' | 'desc';
+    maxItems?: number;
+    onData: (items: Array<T & { id: string }>) => void;
+    onError?: (error: Error) => void;
+  }
+): Unsubscribe {
+  const colRef = getSubcollectionRef<T>(parentCollection, parentDocId, subcollectionName);
+  const q = query(
+    colRef,
+    orderBy(options.orderByField, options.direction ?? 'asc'),
+    limit(options.maxItems ?? 50)
+  );
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items: Array<T & { id: string }> = [];
+      snapshot.forEach((docSnap) => {
+        items.push({
+          ...(docSnap.data() as T),
+          id: docSnap.id,
+        });
+      });
+      options.onData(items);
+    },
+    (error) => {
+      options.onError?.(error);
+    }
+  );
 }

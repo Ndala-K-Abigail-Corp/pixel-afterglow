@@ -27,8 +27,56 @@ service cloud.firestore {
       return request.resource.data.roomCode == resource.data.roomCode
         && request.resource.data.gameType == resource.data.gameType
         && request.resource.data.hostUid == resource.data.hostUid
-        && request.resource.data.maxPlayers == resource.data.maxPlayers
         && request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    // Validates a host-controlled Memory Match settings object:
+    // - cardCount: even integer between 10 and 100
+    // - minPlayers / maxPlayers: integers between 2 and 8 with minPlayers <= maxPlayers
+    function isValidMemoryRoomSettings(settings) {
+      return settings is map
+        && settings.cardCount is int
+        && settings.cardCount >= 10
+        && settings.cardCount <= 100
+        && settings.cardCount % 2 == 0
+        && settings.minPlayers is int
+        && settings.minPlayers >= 2
+        && settings.minPlayers <= 8
+        && settings.maxPlayers is int
+        && settings.maxPlayers >= 2
+        && settings.maxPlayers <= 8
+        && settings.minPlayers <= settings.maxPlayers;
+    }
+
+    // Ensures neither maxPlayers nor memoryRoomSettings changed on updates that do not edit settings.
+    function roomSettingsUnchanged() {
+      return request.resource.data.maxPlayers == resource.data.maxPlayers
+        && (
+          (!('memoryRoomSettings' in resource.data) && !('memoryRoomSettings' in request.resource.data))
+          || (
+            ('memoryRoomSettings' in resource.data)
+            && ('memoryRoomSettings' in request.resource.data)
+            && request.resource.data.memoryRoomSettings == resource.data.memoryRoomSettings
+          )
+        );
+    }
+
+    // Host-only update to persistent Memory Match settings, allowed ONLY in 'waiting' or 'completed'
+    // (strictly forbidden while 'in_progress'). Never mutates active or completed match state.
+    function isValidHostMemorySettingsUpdate() {
+      return resource.data.gameType == 'memory-match'
+        && isRoomHost(resource.data)
+        && resource.data.status in ['waiting', 'completed']
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.players == resource.data.players
+        && request.resource.data.playerOrder == resource.data.playerOrder
+        && request.resource.data.currentTurnUid == resource.data.currentTurnUid
+        && request.resource.data.ticTacToeState == resource.data.ticTacToeState
+        && request.resource.data.memoryMatchState == resource.data.memoryMatchState
+        && ('memoryRoomSettings' in request.resource.data)
+        && isValidMemoryRoomSettings(request.resource.data.memoryRoomSettings)
+        && request.resource.data.maxPlayers == request.resource.data.memoryRoomSettings.maxPlayers
+        && request.resource.data.maxPlayers >= resource.data.playerOrder.size();
     }
 
     // Ensures only the authenticated caller's own player entry is modified,
@@ -167,7 +215,9 @@ service cloud.firestore {
           'currentTurnIndex',
           'currentTurnUid',
           'flippedCardIds',
-          'pendingResetAt'
+          'pendingResetAt',
+          'turnSequence',
+          'turnStartedAt'
         ])
         && nextMM.totalPairs == prevMM.totalPairs
         && nextMM.matchedPairs == prevMM.matchedPairs
@@ -181,37 +231,73 @@ service cloud.firestore {
         && (request.resource.data.currentTurnUid in resource.data.playerOrder);
     }
 
+    // Validates a room member skipping an inactive/disconnected player's turn in Memory Match.
+    // Strictly forbids self-skips, score/match manipulation, and duplicate skips on the same turnSequence.
+    function isValidMemoryMatchTurnSkip() {
+      let prevMM = resource.data.memoryMatchState;
+      let nextMM = request.resource.data.memoryMatchState;
+      let prevSeq = ('turnSequence' in prevMM && prevMM.turnSequence is int) ? prevMM.turnSequence : 1;
+      return resource.data.gameType == 'memory-match'
+        && request.resource.data.status == 'in_progress'
+        && prevMM != null
+        && nextMM != null
+        && resource.data.currentTurnUid != request.auth.uid
+        && request.resource.data.players == resource.data.players
+        && request.resource.data.ticTacToeState == resource.data.ticTacToeState
+        && nextMM.totalPairs == prevMM.totalPairs
+        && nextMM.matchedPairs == prevMM.matchedPairs
+        && nextMM.matchedByPairKey == prevMM.matchedByPairKey
+        && nextMM.turnOrderUids == prevMM.turnOrderUids
+        && nextMM.cards.size() == prevMM.cards.size()
+        && nextMM.winnerUids == prevMM.winnerUids
+        && nextMM.isTie == prevMM.isTie
+        && nextMM.flippedCardIds.size() == 0
+        && nextMM.pendingResetAt == null
+        && request.resource.data.currentTurnUid == nextMM.currentTurnUid
+        && (request.resource.data.currentTurnUid in resource.data.playerOrder)
+        && request.resource.data.currentTurnUid != resource.data.currentTurnUid
+        && nextMM.turnSequence == prevSeq + 1
+        && nextMM.lastSkippedTurn != null
+        && nextMM.lastSkippedTurn.skippedUid == resource.data.currentTurnUid
+        && nextMM.lastSkippedTurn.skippedByUid == request.auth.uid;
+    }
+
     function rematchPlayerReset(uid) {
       return request.resource.data.players[uid].score == 0
         && request.resource.data.players[uid].rematchAccepted == false;
     }
 
     // Minimum joined players required to start or rematch:
-    // - Capacity 2 (or Tic-Tac-Toe) -> minimum 2 players
-    // - Capacity 3 to 8 -> minimum 3 players
+    // - Tic-Tac-Toe -> 2 players
+    // - Memory Match -> host-configured memoryRoomSettings.minPlayers (fallback 2 for legacy rooms)
     function minPlayersForRoom(roomData) {
-      return (roomData.gameType == 'tic-tac-toe' || roomData.maxPlayers <= 2) ? 2 : 3;
+      return roomData.gameType == 'tic-tac-toe'
+        ? 2
+        : (('memoryRoomSettings' in roomData && roomData.memoryRoomSettings != null)
+          ? roomData.memoryRoomSettings.minPlayers
+          : 2);
     }
 
-    // Expected matching pairs for the actual participating player count (2..8):
-    function expectedPairsForPlayerCount(playerCount) {
-      return playerCount == 2 ? 10
-        : playerCount == 3 ? 20
-        : playerCount == 4 ? 30
-        : 50;
+    // Expected card count for Memory Match from persistent room settings (fallback 20 for legacy rooms):
+    function expectedCardCountForRoom(roomData) {
+      return ('memoryRoomSettings' in roomData && roomData.memoryRoomSettings != null)
+        ? roomData.memoryRoomSettings.cardCount
+        : 20;
     }
 
-    // Host starting the next Memory Match round immediately: fresh state, scores zeroed,
-    // ownership cleared, round incremented exactly once, same order/membership.
+    // Host starting the next Memory Match round immediately using the latest saved room settings:
+    // fresh deck matching expectedCardCountForRoom, scores zeroed, ownership cleared, round incremented.
     function isValidMemoryMatchRematchStart() {
       let order = resource.data.playerOrder;
       let prevMM = resource.data.memoryMatchState;
       let nextMM = request.resource.data.memoryMatchState;
-      let expectedPairs = expectedPairsForPlayerCount(order.size());
+      let expectedCards = expectedCardCountForRoom(resource.data);
+      let expectedPairs = expectedCards / 2;
       return resource.data.gameType == 'memory-match'
         && prevMM != null
         && nextMM != null
         && isRoomHost(resource.data)
+        && roomSettingsUnchanged()
         && order.size() >= minPlayersForRoom(resource.data)
         && order.size() <= resource.data.maxPlayers
         && request.resource.data.status == 'in_progress'
@@ -223,9 +309,7 @@ service cloud.firestore {
         && nextMM.matchedPairs == 0
         && nextMM.matchedByPairKey.size() == 0
         && nextMM.totalPairs == expectedPairs
-        && nextMM.cards.size() == expectedPairs * 2
-        && nextMM.totalPairs == prevMM.totalPairs
-        && nextMM.cards.size() == prevMM.cards.size()
+        && nextMM.cards.size() == expectedCards
         && nextMM.flippedCardIds.size() == 0
         && nextMM.pendingResetAt == null
         && nextMM.winnerUids.size() == 0
@@ -252,6 +336,15 @@ service cloud.firestore {
         && request.resource.data.status == 'waiting'
         && request.resource.data.gameType in ['tic-tac-toe', 'memory-match']
         && request.resource.data.maxPlayers in [2, 3, 4, 5, 6, 7, 8]
+        && (
+          (request.resource.data.gameType == 'tic-tac-toe' && request.resource.data.maxPlayers == 2)
+          || (
+            request.resource.data.gameType == 'memory-match'
+            && ('memoryRoomSettings' in request.resource.data)
+            && isValidMemoryRoomSettings(request.resource.data.memoryRoomSettings)
+            && request.resource.data.maxPlayers == request.resource.data.memoryRoomSettings.maxPlayers
+          )
+        )
         && (request.auth.uid in request.resource.data.players)
         && request.resource.data.players[request.auth.uid].uid == request.auth.uid
         && request.resource.data.players[request.auth.uid].isHost == true
@@ -267,36 +360,41 @@ service cloud.firestore {
         && (
           // 1. Marking a room expired is only permitted once its expiresAt timestamp has elapsed
           (
-            request.resource.data.status == 'expired'
+            roomSettingsUnchanged()
+            && request.resource.data.status == 'expired'
             && request.time.toMillis() >= resource.data.expiresAt
           )
           ||
           // 2. Host closing the room
           (
-            request.resource.data.status == 'closed'
+            roomSettingsUnchanged()
+            && request.resource.data.status == 'closed'
             && isRoomHost(resource.data)
             && request.resource.data.playerOrder == resource.data.playerOrder
           )
           ||
-          // 3. Joining, leaving, or updating own connection heartbeat while in 'waiting'
+          // 3. Joining, leaving, updating own heartbeat, or host editing room settings while 'waiting'
           (
             resource.data.status == 'waiting'
             && request.resource.data.status == 'waiting'
             && request.resource.data.ticTacToeState == null
             && request.resource.data.memoryMatchState == null
             && (
-              isValidWaitingRoomJoin()
+              (roomSettingsUnchanged() && isValidWaitingRoomJoin())
               || (
-                callerScoreUnchanged()
+                roomSettingsUnchanged()
+                && callerScoreUnchanged()
                 && request.resource.data.playerOrder == resource.data.playerOrder
               )
-              || isValidWaitingRoomLeave()
+              || (roomSettingsUnchanged() && isValidWaitingRoomLeave())
+              || isValidHostMemorySettingsUpdate()
             )
           )
           ||
-          // 4. Host starting the game once minimum required player count is reached
+          // 4. Host starting the game once configured minimum player count is reached
           (
-            resource.data.status == 'waiting'
+            roomSettingsUnchanged()
+            && resource.data.status == 'waiting'
             && request.resource.data.status == 'in_progress'
             && isRoomHost(resource.data)
             && resource.data.playerOrder.size() >= minPlayersForRoom(resource.data)
@@ -312,15 +410,16 @@ service cloud.firestore {
                 && request.resource.data.memoryMatchState.matchedPairs == 0
                 && request.resource.data.memoryMatchState.matchedByPairKey.size() == 0
                 && request.resource.data.memoryMatchState.turnOrderUids == resource.data.playerOrder
-                && request.resource.data.memoryMatchState.totalPairs == expectedPairsForPlayerCount(resource.data.playerOrder.size())
-                && request.resource.data.memoryMatchState.cards.size() == expectedPairsForPlayerCount(resource.data.playerOrder.size()) * 2
+                && request.resource.data.memoryMatchState.cards.size() == expectedCardCountForRoom(resource.data)
+                && request.resource.data.memoryMatchState.totalPairs == expectedCardCountForRoom(resource.data) / 2
               )
             )
           )
           ||
-          // 5. Active gameplay updates (turn-validated moves, self-scoped heartbeats, or mismatch resets)
+          // 5. Active gameplay updates (settings strictly locked; turn-validated moves, heartbeats, or mismatch resets)
           (
-            resource.data.status == 'in_progress'
+            roomSettingsUnchanged()
+            && resource.data.status == 'in_progress'
             && request.resource.data.status in ['in_progress', 'completed']
             && isRoomMember(resource.data)
             && request.resource.data.playerOrder == resource.data.playerOrder
@@ -342,24 +441,30 @@ service cloud.firestore {
               ||
               // 5c. Resolving a revealed mismatch pair without altering scores or matched pairs
               isValidMismatchReset()
+              ||
+              // 5d. Room member skipping an inactive/disconnected player's turn without altering scores/matches
+              isValidMemoryMatchTurnSkip()
             )
           )
           ||
-          // 6. Post-game rematch voting by members or rematch initiation by host
+          // 6. Post-game member heartbeat, host updating next-round settings, or host initiating rematch
           (
             resource.data.status == 'completed'
             && isRoomMember(resource.data)
             && request.resource.data.playerOrder == resource.data.playerOrder
             && (
               (
-                request.resource.data.status == 'completed'
+                roomSettingsUnchanged()
+                && request.resource.data.status == 'completed'
                 && request.resource.data.ticTacToeState == resource.data.ticTacToeState
                 && request.resource.data.memoryMatchState == resource.data.memoryMatchState
                 && callerScoreUnchanged()
               )
+              || isValidHostMemorySettingsUpdate()
               ||
               (
-                request.resource.data.status == 'in_progress'
+                roomSettingsUnchanged()
+                && request.resource.data.status == 'in_progress'
                 && isRoomHost(resource.data)
                 && request.resource.data.players.diff(resource.data.players).addedKeys().size() == 0
                 && request.resource.data.players.diff(resource.data.players).removedKeys().size() == 0
@@ -380,6 +485,292 @@ service cloud.firestore {
           || request.time.toMillis() >= resource.data.expiresAt
           || resource.data.playerOrder.size() == 0
         );
+
+      // Helper: verifies the parent room exists, is still active, and the caller is a member.
+      function isActiveParentRoomMember() {
+        let parentRoom = get(/databases/$(database)/documents/rooms/$(roomCode));
+        return isSignedIn()
+          && parentRoom != null
+          && parentRoom.data != null
+          && parentRoom.data.status in ['waiting', 'in_progress', 'completed']
+          && (request.auth.uid in parentRoom.data.players);
+      }
+
+      function isActiveParentRoomHost() {
+        let parentRoom = get(/databases/$(database)/documents/rooms/$(roomCode));
+        return isActiveParentRoomMember()
+          && parentRoom.data.hostUid == request.auth.uid;
+      }
+
+      // Real-time player reactions subcollection (isolated from game state, 9 arcade reactions)
+      match /reactions/{reactionId} {
+        allow read: if isActiveParentRoomMember();
+        allow create: if isActiveParentRoomMember()
+          && request.resource.data.roomCode == roomCode
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.nickname is string
+          && request.resource.data.nickname.size() >= 1
+          && request.resource.data.nickname.size() <= 32
+          && request.resource.data.emoji in ['😂', '👏', '🔥', '😮', '😭', '🎉', '❤️', '😎', '😡']
+          && request.resource.data.createdAt is number;
+        allow update, delete: if false;
+      }
+
+      // Real-time room chat subcollection (persists across rounds while room is active)
+      match /messages/{messageId} {
+        allow read: if isActiveParentRoomMember();
+        allow create: if isActiveParentRoomMember()
+          && request.resource.data.roomCode == roomCode
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.nickname is string
+          && request.resource.data.nickname.size() >= 1
+          && request.resource.data.nickname.size() <= 32
+          && request.resource.data.text is string
+          && request.resource.data.text.size() >= 1
+          && request.resource.data.text.size() <= 200
+          && request.resource.data.createdAt is number;
+        allow update: if false;
+        allow delete: if isActiveParentRoomMember()
+          && (
+            isActiveParentRoomHost()
+            || resource.data.uid == request.auth.uid
+          );
+      }
+    }
+
+    // Persistent player profiles: owner-only create/update, protected immutable fields & stats
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.username is string
+        && request.resource.data.username.size() >= 3
+        && request.resource.data.username.size() <= 20
+        && request.resource.data.usernameLower is string
+        && request.resource.data.countryCode is string
+        && request.resource.data.countryCode.matches('^[A-Z]{2}$')
+        && request.resource.data.countryName is string
+        && request.resource.data.countryName.size() >= 2
+        && request.resource.data.accountStatus == 'active'
+        && request.resource.data.createdAt is number
+        && request.resource.data.updatedAt is number;
+      allow update: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.accountStatus == resource.data.accountStatus
+        && request.resource.data.stats == resource.data.stats
+        && request.resource.data.username is string
+        && request.resource.data.username.size() >= 3
+        && request.resource.data.username.size() <= 20
+        && request.resource.data.countryCode is string
+        && request.resource.data.countryCode.matches('^[A-Z]{2}$')
+        && request.resource.data.updatedAt is number;
+      allow delete: if false;
+    }
+
+    // Atomic username reservations guaranteeing globally unique usernames
+    match /usernames/{usernameLower} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.username is string
+        && request.resource.data.username.size() >= 3
+        && request.resource.data.username.size() <= 20
+        && !exists(/databases/$(database)/documents/usernames/$(usernameLower));
+      allow update: if false;
+      allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // Registered (non-anonymous) authenticated user helper for persistent user-owned arcade rooms
+    function isRegisteredUser() {
+      return isSignedIn()
+        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    // Level 1: Persistent user-owned Arcade Rooms (separate from individual Level 2 game sessions)
+    match /arcadeRooms/{arcadeRoomId} {
+      function isArcadeOwner(data) {
+        return isRegisteredUser() && data.ownerUid == request.auth.uid;
+      }
+
+      function isArcadeManager(data) {
+        return isRegisteredUser()
+          && (data.ownerUid == request.auth.uid || (request.auth.uid in data.managerUids));
+      }
+
+      function isArcadeMember(data) {
+        return isSignedIn() && (request.auth.uid in data.memberUids);
+      }
+
+      function arcadeImmutableUnchanged() {
+        return request.resource.data.id == resource.data.id
+          && request.resource.data.inviteCode == resource.data.inviteCode
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.createdAt == resource.data.createdAt;
+      }
+
+      // Members can read any room they belong to; invite-only active rooms can be looked up by invite code
+      allow read: if isSignedIn()
+        && (
+          isArcadeMember(resource.data)
+          || (resource.data.visibility == 'invite-only' && resource.data.status == 'active')
+        );
+
+      // Strictly registered (non-anonymous) users can create persistent arcade rooms
+      allow create: if isRegisteredUser()
+        && request.resource.data.id == arcadeRoomId
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 3
+        && request.resource.data.name.size() <= 40
+        && request.resource.data.availableGames is list
+        && request.resource.data.availableGames.size() >= 1
+        && request.resource.data.visibility in ['invite-only', 'private']
+        && request.resource.data.status == 'active'
+        && request.resource.data.defaultMemoryCardCount is int
+        && request.resource.data.defaultMemoryCardCount >= 10
+        && request.resource.data.defaultMemoryCardCount <= 100
+        && request.resource.data.defaultMemoryCardCount % 2 == 0
+        && request.resource.data.memberUids is list
+        && request.resource.data.memberUids.size() == 1
+        && request.resource.data.memberUids[0] == request.auth.uid
+        && request.resource.data.managerUids is list
+        && request.resource.data.managerUids.size() == 0
+        && request.resource.data.activeSessionId == null
+        && request.resource.data.createdAt is number
+        && request.resource.data.updatedAt is number;
+
+      allow update: if isSignedIn()
+        && arcadeImmutableUnchanged()
+        && (
+          // 1. Owner or authorized manager updating protected settings
+          (
+            isArcadeManager(resource.data)
+            && request.resource.data.name is string
+            && request.resource.data.name.size() >= 3
+            && request.resource.data.name.size() <= 40
+            && request.resource.data.availableGames is list
+            && request.resource.data.availableGames.size() >= 1
+            && request.resource.data.visibility in ['invite-only', 'private']
+            && request.resource.data.defaultMemoryCardCount is int
+            && request.resource.data.defaultMemoryCardCount >= 10
+            && request.resource.data.defaultMemoryCardCount <= 100
+            && request.resource.data.defaultMemoryCardCount % 2 == 0
+            && (isArcadeOwner(resource.data) || request.resource.data.managerUids == resource.data.managerUids)
+          )
+          ||
+          // 2. User joining an invite-only active room (only adding own UID to memberUids)
+          (
+            resource.data.status == 'active'
+            && resource.data.visibility == 'invite-only'
+            && !(request.auth.uid in resource.data.memberUids)
+            && (request.auth.uid in request.resource.data.memberUids)
+            && request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+          )
+          ||
+          // 3. Member leaving the room voluntarily (removing only own UID)
+          (
+            isArcadeMember(resource.data)
+            && request.auth.uid != resource.data.ownerUid
+            && !(request.auth.uid in request.resource.data.memberUids)
+            && request.resource.data.memberUids.size() == resource.data.memberUids.size() - 1
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids', 'managerUids', 'updatedAt'])
+          )
+          ||
+          // 4. Member starting or ending the single active game session (prevents duplicate active sessions)
+          (
+            isArcadeMember(resource.data)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'activeSessionId',
+              'activeSessionRoomCode',
+              'activeSessionGameType',
+              'updatedAt'
+            ])
+            && (
+              (resource.data.activeSessionId == null && request.resource.data.activeSessionId is string)
+              || (resource.data.activeSessionId != null && request.resource.data.activeSessionId == null)
+            )
+          )
+        );
+
+      // Strictly owner-only deletion
+      allow delete: if isArcadeOwner(resource.data);
+
+      function parentArcadeRoom() {
+        return get(/databases/$(database)/documents/arcadeRooms/$(arcadeRoomId));
+      }
+
+      // Persistent Arcade Room Members subcollection
+      match /members/{memberUid} {
+        allow read: if isSignedIn()
+          && (request.auth.uid in parentArcadeRoom().data.memberUids);
+
+        allow create: if isSignedIn()
+          && request.auth.uid == memberUid
+          && request.resource.data.uid == request.auth.uid
+          && (
+            (request.resource.data.role == 'owner' && parentArcadeRoom().data.ownerUid == request.auth.uid)
+            || request.resource.data.role == 'member'
+          );
+
+        allow update: if isSignedIn()
+          && (
+            (
+              isRegisteredUser()
+              && parentArcadeRoom().data.ownerUid == request.auth.uid
+              && memberUid != parentArcadeRoom().data.ownerUid
+              && request.resource.data.uid == resource.data.uid
+              && request.resource.data.role in ['manager', 'member']
+            )
+            || (
+              request.auth.uid == memberUid
+              && request.resource.data.uid == resource.data.uid
+              && request.resource.data.role == resource.data.role
+            )
+          );
+
+        allow delete: if isSignedIn()
+          && (
+            (isRegisteredUser() && parentArcadeRoom().data.ownerUid == request.auth.uid)
+            || (
+              isRegisteredUser()
+              && (request.auth.uid in parentArcadeRoom().data.managerUids)
+              && memberUid != parentArcadeRoom().data.ownerUid
+              && !(memberUid in parentArcadeRoom().data.managerUids)
+            )
+            || (request.auth.uid == memberUid && memberUid != parentArcadeRoom().data.ownerUid)
+          );
+      }
+
+      // Level 2: Game Sessions subcollection belonging to a valid Persistent Arcade Room
+      match /sessions/{sessionId} {
+        allow read: if isSignedIn()
+          && (request.auth.uid in parentArcadeRoom().data.memberUids);
+
+        allow create: if isSignedIn()
+          && (request.auth.uid in parentArcadeRoom().data.memberUids)
+          && request.resource.data.sessionId == sessionId
+          && request.resource.data.arcadeRoomId == arcadeRoomId
+          && request.resource.data.createdByUid == request.auth.uid
+          && request.resource.data.gameType in ['memory-match', 'tic-tac-toe']
+          && request.resource.data.status == 'waiting'
+          && request.resource.data.createdAt is number;
+
+        allow update: if isSignedIn()
+          && (request.auth.uid in parentArcadeRoom().data.memberUids)
+          && request.resource.data.sessionId == resource.data.sessionId
+          && request.resource.data.arcadeRoomId == resource.data.arcadeRoomId
+          && request.resource.data.roomCode == resource.data.roomCode
+          && request.resource.data.gameType == resource.data.gameType
+          && request.resource.data.createdByUid == resource.data.createdByUid
+          && request.resource.data.createdAt == resource.data.createdAt;
+
+        allow delete: if isRegisteredUser()
+          && parentArcadeRoom().data.ownerUid == request.auth.uid;
+      }
     }
 
     // Deny all other collections by default
