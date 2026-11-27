@@ -64,6 +64,7 @@ import {
 } from '../../logic/arcadeRooms';
 import { saveActiveRoomSession, normalizeRoomCode } from '../../logic/multiplayerRoom';
 import { getCountryByCode } from '../../data/countries';
+import { formatUserError } from '../../utils/userErrorFormatter';
 
 export interface ActiveArcadeLaunchContext {
   arcadeRoomId: string;
@@ -101,12 +102,10 @@ export const ArcadeRoomsView: React.FC<ArcadeRoomsViewProps> = ({
   const [members, setMembers] = useState<ArcadeRoomMember[]>([]);
   const [sessions, setSessions] = useState<ArcadeGameSession[]>([]);
 
-  // Create room state
+  // Create room state (simplified: Room Name + Access Setting only; game config happens inside the room)
   const [showCreateForm, setShowCreateForm] = useState<boolean>(false);
   const [newName, setNewName] = useState<string>('');
-  const [newGames, setNewGames] = useState<ArcadeGameId[]>(['memory-match', 'tic-tac-toe']);
   const [newVisibility, setNewVisibility] = useState<ArcadeRoomVisibility>('invite-only');
-  const [newCardCount, setNewCardCount] = useState<number>(20);
 
   // Join by code state
   const [joinCode, setJoinCode] = useState<string>(initialInviteCode ?? '');
@@ -214,9 +213,9 @@ export const ArcadeRoomsView: React.FC<ArcadeRoomsViewProps> = ({
     try {
       const created = await createPersistentArcadeRoom({
         name: newName,
-        availableGames: newGames,
+        availableGames: ['memory-match', 'tic-tac-toe', 'snake'],
         visibility: newVisibility,
-        defaultMemoryCardCount: newCardCount,
+        defaultMemoryCardCount: 20,
         ownerUsername: profile?.username || 'Player',
         countryCode: profile?.countryCode,
         avatarId: profile?.avatarId,
@@ -226,7 +225,7 @@ export const ArcadeRoomsView: React.FC<ArcadeRoomsViewProps> = ({
       setSelectedRoomId(created.id);
       setInfoMsg(`Created persistent arcade room "${created.name}"!`);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Could not create arcade room.');
+      setErrorMsg(formatUserError(err, 'Could not create arcade room.'));
     } finally {
       setIsBusy(false);
     }
@@ -253,7 +252,7 @@ export const ArcadeRoomsView: React.FC<ArcadeRoomsViewProps> = ({
       setSelectedRoomId(joined.id);
       setInfoMsg(`Joined "${joined.name}"!`);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Could not join arcade room.');
+      setErrorMsg(formatUserError(err, 'Could not join arcade room.'));
     } finally {
       setIsBusy(false);
     }
@@ -1077,49 +1076,9 @@ export const ArcadeRoomsView: React.FC<ArcadeRoomsViewProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="block text-[10px] font-bold uppercase text-[#FFF0D7]/75 mb-1.5">
-              Available Games (player limits auto-enforced per game)
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {ARCADE_GAME_CATALOG.map((g) => {
-                const selected = newGames.includes(g.id);
-                return (
-                  <button
-                    key={g.id}
-                    type="button"
-                    onClick={() => toggleGameSelection(newGames, setNewGames, g.id)}
-                    data-testid={`arcade-create-game-${g.id}`}
-                    className={`px-3 py-2 rounded-xl border-2 text-xs font-semibold cursor-pointer transition-colors ${
-                      selected
-                        ? 'bg-[#56E0CB]/20 border-[#56E0CB] text-[#56E0CB]'
-                        : 'bg-[#171329] border-[#3D345F] text-[#FFF0D7]/65'
-                    }`}
-                  >
-                    {g.title} ({g.minPlayers === g.maxPlayers ? `${g.maxPlayers}P` : `${g.minPlayers}–${g.maxPlayers}P`})
-                    {!g.playable && ' · Soon'}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {newGames.includes('memory-match') && (
-            <div>
-              <label className="block text-[10px] font-bold uppercase text-[#FFF0D7]/75 mb-1">
-                Default Memory Match Board: <strong className="text-[#56E0CB]">{newCardCount} Cards</strong> ({newCardCount / 2} Pairs)
-              </label>
-              <input
-                type="range"
-                min={MEMORY_MIN_CARD_COUNT}
-                max={MEMORY_MAX_CARD_COUNT}
-                step={MEMORY_CARD_COUNT_STEP}
-                value={newCardCount}
-                onChange={(e) => setNewCardCount(Number(e.target.value))}
-                className="w-full accent-[#56E0CB]"
-              />
-            </div>
-          )}
+          <p className="text-xs text-[#FFF0D7]/70">
+            Your Virtual Arcade Room is a permanent space for friends. Choose a game and configure game settings after opening the room.
+          </p>
 
           <div className="flex items-center gap-2">
             <button

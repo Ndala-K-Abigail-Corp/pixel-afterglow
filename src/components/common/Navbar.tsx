@@ -4,19 +4,33 @@
  */
 
 import React from 'react';
-import { Volume2, VolumeX, Gamepad2, Info, UserCircle2, DoorOpen } from 'lucide-react';
+import { Volume2, VolumeX, Gamepad2, Info, UserCircle2, DoorOpen, Trophy, Sparkles, MessageSquarePlus } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
 import { useAuth } from '../../context/AuthContext';
 import { getCountryByCode } from '../../data/countries';
 import { PWAInstallButton } from './PWAInstallButton';
 
-export type AppView = 'home' | 'arcade-rooms' | 'game-tic-tac-toe' | 'game-memory-match';
+export type AppView =
+  | 'home'
+  | 'dashboard'
+  | 'leaderboard'
+  | 'whats-new'
+  | 'feedback'
+  | 'arcade-rooms'
+  | 'game-tic-tac-toe'
+  | 'game-memory-match'
+  | 'game-snake';
 
 interface NavbarProps {
   currentView: AppView;
   onNavigateHome: () => void;
   onOpenGames: () => void;
   onOpenArcadeRooms?: () => void;
+  onOpenLeaderboard?: () => void;
+  onOpenWhatsNew?: () => void;
+  onOpenFeedback?: () => void;
+  hasUnreadWhatsNew?: boolean;
+  onOpenDashboard?: () => void;
   onOpenAbout: () => void;
   onOpenAuth?: () => void;
 }
@@ -26,6 +40,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   onNavigateHome,
   onOpenGames,
   onOpenArcadeRooms,
+  onOpenLeaderboard,
+  onOpenWhatsNew,
+  onOpenFeedback,
+  hasUnreadWhatsNew = false,
+  onOpenDashboard,
   onOpenAbout,
   onOpenAuth,
 }) => {
@@ -99,6 +118,67 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
+          {/* Dedicated Arcade Leaderboard link */}
+          {onOpenLeaderboard && (
+            <button
+              type="button"
+              onClick={onOpenLeaderboard}
+              data-testid="navbar-leaderboard-btn"
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium transition-colors cursor-pointer ${
+                currentView === 'leaderboard'
+                  ? 'bg-[#FFC66D]/20 text-[#FFC66D] border border-[#FFC66D]/60'
+                  : 'text-[#FFF0D7] hover:text-[#FFC66D] hover:bg-[#292342]'
+              }`}
+              aria-label="Open Arcade Leaderboard"
+            >
+              <Trophy className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#FFC66D] shrink-0" />
+              <span className="hidden md:inline">Leaderboard</span>
+            </button>
+          )}
+
+          {/* What's New release announcements link */}
+          {onOpenWhatsNew && (
+            <button
+              type="button"
+              onClick={onOpenWhatsNew}
+              data-testid="navbar-whats-new-btn"
+              className={`relative flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium transition-colors cursor-pointer ${
+                currentView === 'whats-new'
+                  ? 'bg-[#56E0CB]/20 text-[#56E0CB] border border-[#56E0CB]/60'
+                  : 'text-[#FFF0D7] hover:text-[#56E0CB] hover:bg-[#292342]'
+              }`}
+              aria-label="Open What's New"
+            >
+              <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#56E0CB] shrink-0" />
+              <span className="hidden lg:inline">What&apos;s New</span>
+              {hasUnreadWhatsNew && (
+                <span
+                  data-testid="navbar-whats-new-dot"
+                  className="w-2 h-2 rounded-full bg-[#FF776E] shrink-0"
+                  aria-label="New release available"
+                />
+              )}
+            </button>
+          )}
+
+          {/* Feedback & Bug Report link */}
+          {onOpenFeedback && (
+            <button
+              type="button"
+              onClick={onOpenFeedback}
+              data-testid="navbar-feedback-btn"
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-sm font-medium transition-colors cursor-pointer ${
+                currentView === 'feedback'
+                  ? 'bg-[#56E0CB]/20 text-[#56E0CB] border border-[#56E0CB]/60'
+                  : 'text-[#FFF0D7] hover:text-[#56E0CB] hover:bg-[#292342]'
+              }`}
+              aria-label="Submit Feedback or Report a Bug"
+            >
+              <MessageSquarePlus className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#56E0CB] shrink-0" />
+              <span className="hidden xl:inline">Feedback</span>
+            </button>
+          )}
+
           {/* About link */}
           <button
             onClick={onOpenAbout}
@@ -110,6 +190,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* PWA Install Button */}
           <PWAInstallButton />
+
+          {/* Authenticated Arcade Home shortcut when viewing public homepage */}
+          {isSignedInAccount && profile && onOpenDashboard && (
+            <button
+              type="button"
+              onClick={onOpenDashboard}
+              data-testid="navbar-arcade-home-btn"
+              className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold bg-[#56E0CB]/15 text-[#56E0CB] border border-[#56E0CB]/60 hover:bg-[#56E0CB]/25 transition-colors cursor-pointer"
+            >
+              <span>Arcade Home</span>
+            </button>
+          )}
 
           {/* Account / Profile Button */}
           {onOpenAuth && (

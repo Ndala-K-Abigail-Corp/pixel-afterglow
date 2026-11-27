@@ -32,12 +32,12 @@ export const GameCollection: React.FC<GameCollectionProps> = ({ onPlayGame }) =>
         </div>
 
         <p className="text-xs sm:text-sm text-[#FFF0D7]/75 max-w-sm">
-          Both cartridges below are fully playable in your browser right now. Zero downloads, instant fun.
+          All {playableGames.length} cartridges below are fully playable in your browser right now. Zero downloads, instant fun.
         </p>
       </div>
 
-      {/* Playable Games Grid: 2 Columns on Tablet/Desktop */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8 mb-12 sm:mb-16">
+      {/* Playable Games Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 mb-12 sm:mb-16">
         {playableGames.map((game) => (
           <GameCard key={game.id} game={game} onPlay={onPlayGame} featured={true} />
         ))}

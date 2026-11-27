@@ -8,7 +8,7 @@ import { BoardState, Player, WinningLine } from './game';
 /**
  * Supported multiplayer game types in Pixel Afterglow.
  */
-export type MultiplayerGameType = 'tic-tac-toe' | 'memory-match';
+export type MultiplayerGameType = 'tic-tac-toe' | 'memory-match' | 'snake';
 
 /**
  * Strictly defined lifecycle states for a multiplayer room.
@@ -26,7 +26,7 @@ export type RoomStatus =
 export const VALID_ROOM_STATE_TRANSITIONS: Readonly<Record<RoomStatus, ReadonlyArray<RoomStatus>>> = {
   waiting: ['in_progress', 'closed', 'expired'],
   in_progress: ['completed', 'closed', 'expired'],
-  completed: ['in_progress', 'closed', 'expired'], // completed -> in_progress used for consensused rematch
+  completed: ['waiting', 'in_progress', 'closed', 'expired'], // completed -> waiting returns players to waiting room before next round
   closed: ['expired'],
   expired: [],
 };
@@ -88,6 +88,7 @@ export const GAME_PLAYER_LIMITS: Readonly<
 > = {
   'tic-tac-toe': { minPlayers: 2, maxPlayers: 2 },
   'memory-match': { minPlayers: 2, maxPlayers: 8 },
+  snake: { minPlayers: 2, maxPlayers: 10 },
 };
 
 /** Every selectable card count: 10, 12, 14 … 98, 100. */
@@ -200,7 +201,7 @@ export function getRoomMinimumPlayers(
     memoryRoomSettings?: MemoryRoomSettings | null;
   }
 ): number {
-  if (room.gameType === 'tic-tac-toe') {
+  if (room.gameType === 'tic-tac-toe' || room.gameType === 'snake') {
     return 2;
   }
   return getRoomMemorySettings(room).minPlayers;
@@ -227,6 +228,8 @@ export interface RoomPlayer {
   score: number;
   /** Whether the player has voted to accept a rematch after game completion */
   rematchAccepted: boolean;
+  /** Ready indicator in the waiting room before the host starts the next round */
+  isReady?: boolean;
 }
 
 /**
@@ -381,6 +384,14 @@ export const CHAT_MESSAGE_MAX_LENGTH = 200;
 export const REACTION_COOLDOWN_MS = 1500;
 export const CHAT_COOLDOWN_MS = 1200;
 
+export interface CompletedRoundSummary {
+  roundNumber: number;
+  winnerNames: string[];
+  isDraw: boolean;
+  completedAt: number;
+  summaryText: string;
+}
+
 /**
  * Shared Firestore document structure for a room in `rooms/{roomCode}`.
  */
@@ -390,6 +401,10 @@ export interface MultiplayerRoomDocument {
   status: RoomStatus;
   hostUid: string;
   maxPlayers: number;
+  /** Current round number (starts at 1, increments each time players return to waiting room) */
+  roundNumber?: number;
+  /** Preserved summary of the most recently completed round when returning to waiting room */
+  lastCompletedRound?: CompletedRoundSummary | null;
   /** Map of Firebase Anonymous Auth UID -> RoomPlayer */
   players: Record<string, RoomPlayer>;
   /** Ordered list of player UIDs by join order */

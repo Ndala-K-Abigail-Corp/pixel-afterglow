@@ -11,6 +11,7 @@ import {
   getCountryByCode,
   searchCountries,
 } from '../../data/countries';
+import { CountryFlag } from '../common/CountryFlag';
 
 export interface CountrySelectorProps {
   value: string;
@@ -242,9 +243,7 @@ export const CountrySelector: React.FC<CountrySelectorProps> = ({
                   }`}
                 >
                   <span className="flex items-center gap-2 min-w-0">
-                    <span className="text-base leading-none shrink-0" aria-hidden="true">
-                      {country.flag}
-                    </span>
+                    <CountryFlag code={country.code} name={country.name} size="sm" />
                     <span className="truncate">{country.name}</span>
                     <span className="text-[10px] font-mono text-[#56E0CB]/80 shrink-0">
                       {country.code}
@@ -283,9 +282,7 @@ export const CountrySelector: React.FC<CountrySelectorProps> = ({
         <span className="flex items-center gap-2 min-w-0 truncate">
           {selected ? (
             <>
-              <span className="text-base leading-none shrink-0" aria-hidden="true">
-                {selected.flag}
-              </span>
+              <CountryFlag code={selected.code} name={selected.name} size="sm" />
               <span className="font-semibold truncate">{selected.name}</span>
               <span className="text-[10px] font-mono text-[#56E0CB] shrink-0">
                 {selected.code}

@@ -25,6 +25,11 @@ import { TicTacToeMultiplayerView } from './TicTacToeMultiplayerView';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
 import { useAudio } from '../../context/AudioContext';
+import { useAuth } from '../../context/AuthContext';
+import {
+  buildGameResultId,
+  recordPrivateSinglePlayerCompletion,
+} from '../../logic/gameHistory';
 
 interface TicTacToeGameProps {
   onBackToHome: () => void;
@@ -32,6 +37,7 @@ interface TicTacToeGameProps {
 
 export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) => {
   const { playMove, playWin, playDraw, playReset, playClick } = useAudio();
+  const { uid, isSignedInAccount } = useAuth();
   const [mode, setMode] = useState<TicTacToeMode>('pvc'); // Player vs Computer by default or PvP
   const [isOnlineMultiplayer, setIsOnlineMultiplayer] = useState<boolean>(() =>
     Boolean(
@@ -104,6 +110,27 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
             ...prev,
             oWins: prev.oWins + 1,
           }));
+          if (isSignedInAccount && uid) {
+            const completedAt = Date.now();
+            void recordPrivateSinglePlayerCompletion(uid, {
+              resultId: buildGameResultId({
+                gameId: 'tic-tac-toe',
+                mode: 'single-player',
+                sessionId: `sp_ttt_${completedAt}_${thisRoundId}`,
+                playerUid: uid,
+              }),
+              gameId: 'tic-tac-toe',
+              sessionId: `sp_ttt_${completedAt}_${thisRoundId}`,
+              playerUid: uid,
+              completedAt,
+              mode: 'single-player',
+              outcome: 'loss',
+              score: 0,
+              durationSeconds: null,
+              validated: true,
+              metrics: { difficulty: 'unbeatable' },
+            });
+          }
           setTimeout(() => {
             setIsCelebrationOpen(true);
           }, 300);
@@ -113,6 +140,27 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
             ...prev,
             draws: prev.draws + 1,
           }));
+          if (isSignedInAccount && uid) {
+            const completedAt = Date.now();
+            void recordPrivateSinglePlayerCompletion(uid, {
+              resultId: buildGameResultId({
+                gameId: 'tic-tac-toe',
+                mode: 'single-player',
+                sessionId: `sp_ttt_${completedAt}_${thisRoundId}`,
+                playerUid: uid,
+              }),
+              gameId: 'tic-tac-toe',
+              sessionId: `sp_ttt_${completedAt}_${thisRoundId}`,
+              playerUid: uid,
+              completedAt,
+              mode: 'single-player',
+              outcome: 'draw',
+              score: 0,
+              durationSeconds: null,
+              validated: true,
+              metrics: { difficulty: 'unbeatable' },
+            });
+          }
         }
       } else {
         setCurrentPlayer('X');
@@ -124,7 +172,7 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
         clearTimeout(aiTimeoutRef.current);
       }
     };
-  }, [mode, currentPlayer, status.isOver, board, playMove, playWin, playDraw]);
+  }, [mode, currentPlayer, status.isOver, board, playMove, playWin, playDraw, isSignedInAccount, uid]);
 
   // Handle cell click (Human move)
   const handleCellClick = useCallback(
@@ -150,6 +198,27 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
             [nextStatus.winner === 'X' ? 'xWins' : 'oWins']:
               prev[nextStatus.winner === 'X' ? 'xWins' : 'oWins'] + 1,
           }));
+          if (mode === 'pvc' && isSignedInAccount && uid) {
+            const completedAt = Date.now();
+            void recordPrivateSinglePlayerCompletion(uid, {
+              resultId: buildGameResultId({
+                gameId: 'tic-tac-toe',
+                mode: 'single-player',
+                sessionId: `sp_ttt_${completedAt}_${roundIdRef.current}`,
+                playerUid: uid,
+              }),
+              gameId: 'tic-tac-toe',
+              sessionId: `sp_ttt_${completedAt}_${roundIdRef.current}`,
+              playerUid: uid,
+              completedAt,
+              mode: 'single-player',
+              outcome: nextStatus.winner === 'X' ? 'win' : 'loss',
+              score: nextStatus.winner === 'X' ? 1 : 0,
+              durationSeconds: null,
+              validated: true,
+              metrics: { difficulty: 'unbeatable' },
+            });
+          }
           setTimeout(() => {
             setIsCelebrationOpen(true);
           }, 300);
@@ -159,12 +228,33 @@ export const TicTacToeGame: React.FC<TicTacToeGameProps> = ({ onBackToHome }) =>
             ...prev,
             draws: prev.draws + 1,
           }));
+          if (mode === 'pvc' && isSignedInAccount && uid) {
+            const completedAt = Date.now();
+            void recordPrivateSinglePlayerCompletion(uid, {
+              resultId: buildGameResultId({
+                gameId: 'tic-tac-toe',
+                mode: 'single-player',
+                sessionId: `sp_ttt_${completedAt}_${roundIdRef.current}`,
+                playerUid: uid,
+              }),
+              gameId: 'tic-tac-toe',
+              sessionId: `sp_ttt_${completedAt}_${roundIdRef.current}`,
+              playerUid: uid,
+              completedAt,
+              mode: 'single-player',
+              outcome: 'draw',
+              score: 0,
+              durationSeconds: null,
+              validated: true,
+              metrics: { difficulty: 'unbeatable' },
+            });
+          }
         }
       } else {
         setCurrentPlayer(getNextPlayer(currentPlayer));
       }
     },
-    [board, currentPlayer, status.isOver, mode, isAiThinking, playMove, playWin, playDraw]
+    [board, currentPlayer, status.isOver, mode, isAiThinking, playMove, playWin, playDraw, isSignedInAccount, uid]
   );
 
   // Restart current round (increments roundId to cancel any pending AI actions)

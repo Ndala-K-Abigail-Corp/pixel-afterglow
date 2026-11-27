@@ -27,15 +27,18 @@ import {
   startTicTacToeMultiplayerGame,
   makeTicTacToeMultiplayerMove,
   voteTicTacToeRematch,
-  startTicTacToeRematch,
 } from '../../logic/ticTacToeMultiplayer';
 import {
   isPlayerEffectivelyConnected,
   getUserFriendlyMultiplayerError,
+  returnRoomToWaiting,
+  togglePlayerReady,
 } from '../../logic/multiplayerRoom';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
 import { useAudio } from '../../context/AudioContext';
+import { useAuth } from '../../context/AuthContext';
+import { recordVerifiedMultiplayerMatchForPlayer } from '../../logic/matchRecording';
 
 interface TicTacToeMultiplayerViewProps {
   onBackToHome: () => void;
@@ -45,6 +48,8 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
   onBackToHome,
 }) => {
   const { playMove, playWin, playDraw, playReset, playClick } = useAudio();
+  const { profile, isSignedInAccount } = useAuth();
+  const recordedTttRoundRef = useRef<string | null>(null);
   const {
     room,
     uid,
@@ -104,6 +109,27 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
       } else if (ttt.isDraw) {
         playDraw();
       }
+
+      const roundKey = `${room.roomCode}_r${ttt.roundNumber}`;
+      if (uid && isSignedInAccount && profile && recordedTttRoundRef.current !== roundKey) {
+        recordedTttRoundRef.current = roundKey;
+        const myOutcome = ttt.isDraw
+          ? 'draw'
+          : ttt.winnerUid === uid
+            ? 'win'
+            : 'loss';
+        void recordVerifiedMultiplayerMatchForPlayer({
+          roomCode: room.roomCode,
+          gameId: 'tic-tac-toe',
+          roundNumber: ttt.roundNumber,
+          playerUid: uid,
+          profile,
+          isRegisteredAccount: isSignedInAccount,
+          outcome: myOutcome,
+          score: myOutcome === 'win' ? 1 : 0,
+          opponentUids: room.playerOrder.filter((id) => id !== uid),
+        });
+      }
     } else if (room.status === 'in_progress') {
       if (prevStatusRef.current === 'completed') {
         playReset();
@@ -112,7 +138,7 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
       prevStatusRef.current = 'in_progress';
       prevRoundRef.current = ttt.roundNumber;
     }
-  }, [room, playWin, playDraw, playReset]);
+  }, [room, uid, profile, isSignedInAccount, playWin, playDraw, playReset]);
 
   const handleStartGame = async () => {
     if (!room) return;
@@ -163,15 +189,14 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
     }
   };
 
-  const handleStartRematch = async () => {
+  const handleToggleReady = async (nextReady: boolean) => {
     if (!room) return;
-    playClick();
     setActionError(null);
     try {
-      const updated = await startTicTacToeRematch(room.roomCode);
+      const updated = await togglePlayerReady(room.roomCode, nextReady);
       syncRoom?.(updated);
     } catch (err) {
-      setActionError(getUserFriendlyMultiplayerError(err, 'rematch'));
+      setActionError(getUserFriendlyMultiplayerError(err, 'game-action'));
     }
   };
 
@@ -208,6 +233,7 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
         onDismissInvitation={dismissInvitation}
         onCreateRoom={createRoom}
         onJoinRoom={joinRoom}
+        onToggleReady={handleToggleReady}
         onStartGame={handleStartGame}
         onLeaveRoom={leaveRoom}
         onCloseRoom={closeRoom}
@@ -238,10 +264,6 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
   const winningIndices: number[] = ttt.winningLine ? ttt.winningLine.indices : [];
 
   const winnerPlayer = ttt.winnerUid ? room.players[ttt.winnerUid] : null;
-  const bothAgreedToRematch = Boolean(
-    playerX?.rematchAccepted && playerO?.rematchAccepted
-  );
-  const guestAgreedToRematch = Boolean(playerO?.rematchAccepted);
 
   return (
     <div data-testid="tictactoe-multiplayer-active">
@@ -601,17 +623,18 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
             {isHost && (
               <button
                 type="button"
-                onClick={() => void handleStartRematch()}
-                disabled={!bothAgreedToRematch && !guestAgreedToRematch}
-                className={`flex-1 py-3 px-4 rounded-xl font-['Press_Start_2P'] text-[11px] uppercase flex items-center justify-center gap-2 transition-all ${
-                  bothAgreedToRematch || guestAgreedToRematch
-                    ? 'bg-[#FF776E] hover:bg-[#ff8f87] text-[#171329] cursor-pointer shadow-[0_0_15px_rgba(255,119,110,0.4)]'
-                    : 'bg-[#171329] border border-[#FFF0D7]/20 text-[#FFF0D7]/40 cursor-not-allowed'
-                }`}
+                onClick={() => {
+                  playClick();
+                  setIsCelebrationOpen(false);
+                  void returnRoomToWaiting(room.roomCode)
+                    .then((next) => syncRoom?.(next))
+                    .catch((err) => setActionError(getUserFriendlyMultiplayerError(err, 'rematch')));
+                }}
+                className="flex-1 py-3 px-4 rounded-xl font-['Press_Start_2P'] text-[11px] uppercase flex items-center justify-center gap-2 transition-all bg-[#FF776E] hover:bg-[#ff8f87] text-[#171329] cursor-pointer shadow-[0_0_15px_rgba(255,119,110,0.4)]"
                 data-testid="mp-start-rematch-btn"
               >
                 <RotateCcw className="w-4 h-4" />
-                Start Rematch
+                Return to Waiting Room
               </button>
             )}
           </div>
@@ -624,7 +647,11 @@ export const TicTacToeMultiplayerView: React.FC<TicTacToeMultiplayerViewProps> =
         onClose={() => setIsCelebrationOpen(false)}
         onPlayAgain={() => {
           setIsCelebrationOpen(false);
-          if (!myPlayer?.rematchAccepted) {
+          if (isHost) {
+            void returnRoomToWaiting(room.roomCode)
+              .then((next) => syncRoom?.(next))
+              .catch((err) => setActionError(getUserFriendlyMultiplayerError(err, 'rematch')));
+          } else if (!myPlayer?.rematchAccepted) {
             void handleVoteRematch();
           }
         }}

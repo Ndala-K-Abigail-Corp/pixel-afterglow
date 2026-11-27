@@ -29,6 +29,14 @@ import App from '../App';
 import { AudioProvider } from '../context/AudioContext';
 import { buildInitialRoomDocument } from './multiplayerRoom';
 
+vi.mock('../lib/firebase', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/firebase')>();
+  return {
+    ...actual,
+    isFirebaseConfigured: vi.fn(() => false),
+  };
+});
+
 vi.mock('../lib/auth', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/auth')>();
   return {
@@ -202,14 +210,14 @@ describe('Persistent Arcade Rooms, Board-Anchored Pixel Reactions, Country UI & 
     expect(onOpenAuth).toHaveBeenCalledTimes(1);
   });
 
-  it('displays the footer ONLY on the homepage and removes it on game and arcade room views', () => {
+  it('displays the footer ONLY on the homepage and removes it on game and arcade room views', async () => {
     render(<App />);
     // Homepage shows footer
     expect(document.querySelector('footer')).toBeTruthy();
 
-    // Navigate to Arcade Rooms -> footer is removed
+    // Navigate to Arcade Rooms -> footer is removed (lazy-loaded view)
     fireEvent.click(screen.getByTestId('navbar-arcade-rooms-btn'));
-    expect(screen.getByTestId('arcade-rooms-directory')).toBeTruthy();
+    expect(await screen.findByTestId('arcade-rooms-directory')).toBeTruthy();
     expect(document.querySelector('footer')).toBeNull();
   });
 });

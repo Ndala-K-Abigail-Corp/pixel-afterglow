@@ -6,7 +6,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { User } from 'firebase/auth';
 import { isFirebaseConfigured } from '../lib/firebase';
-import { subscribeToAuthChanges, signOutUser } from '../lib/auth';
+import { subscribeToIdTokenChanges, signOutUser } from '../lib/auth';
 import { fetchUserProfile } from '../logic/userProfile';
 import { savePreferredNickname } from '../logic/multiplayerRoom';
 import type { UserProfile } from '../types/profile';
@@ -17,9 +17,11 @@ export interface AuthContextValue {
   profile: UserProfile | null;
   isAnonymous: boolean;
   isSignedInAccount: boolean;
+  isAdmin: boolean;
   isLoadingAuth: boolean;
   needsProfileCompletion: boolean;
   refreshProfile: () => Promise<UserProfile | null>;
+  refreshAdminClaim: () => Promise<boolean>;
   setProfileState: (next: UserProfile | null) => void;
   signOut: () => Promise<void>;
 }
@@ -29,6 +31,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(() => isFirebaseConfigured());
 
   const loadProfileForUser = useCallback(async (firebaseUser: User | null) => {
@@ -55,15 +58,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     let isMounted = true;
-    const unsubscribe = subscribeToAuthChanges(
+    const unsubscribe = subscribeToIdTokenChanges(
       (nextUser) => {
         if (!isMounted) return;
         setUser(nextUser);
         if (!nextUser || nextUser.isAnonymous) {
           setProfile(null);
+          setIsAdmin(false);
           setIsLoadingAuth(false);
           return;
         }
+        // Verify administrator role exclusively via signed Firebase Auth custom claims
+        void nextUser
+          .getIdTokenResult()
+          .then((tokenResult) => {
+            if (isMounted) {
+              setIsAdmin(tokenResult.claims?.admin === true);
+            }
+          })
+          .catch(() => {
+            if (isMounted) setIsAdmin(false);
+          });
         void loadProfileForUser(nextUser).finally(() => {
           if (isMounted) {
             setIsLoadingAuth(false);
@@ -72,6 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       },
       () => {
         if (isMounted) {
+          setIsAdmin(false);
           setIsLoadingAuth(false);
         }
       }
@@ -87,10 +103,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return loadProfileForUser(user);
   }, [loadProfileForUser, user]);
 
+  /**
+   * Forces a fresh ID token fetch from Firebase Auth so revoked or newly granted
+   * `{ admin: true }` custom claims are reflected immediately and expired tokens fail closed.
+   */
+  const refreshAdminClaim = useCallback(async (): Promise<boolean> => {
+    if (!user || user.isAnonymous) {
+      setIsAdmin(false);
+      return false;
+    }
+    try {
+      const tokenResult = await user.getIdTokenResult(true);
+      const verified = tokenResult.claims?.admin === true;
+      setIsAdmin(verified);
+      return verified;
+    } catch {
+      setIsAdmin(false);
+      return false;
+    }
+  }, [user]);
+
   const handleSignOut = useCallback(async () => {
     await signOutUser();
     setUser(null);
     setProfile(null);
+    setIsAdmin(false);
   }, []);
 
   const isAnonymous = Boolean(user?.isAnonymous);
@@ -105,9 +142,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile,
         isAnonymous,
         isSignedInAccount,
+        isAdmin,
         isLoadingAuth,
         needsProfileCompletion,
         refreshProfile,
+        refreshAdminClaim,
         setProfileState: setProfile,
         signOut: handleSignOut,
       }}
@@ -128,9 +167,11 @@ export function useAuth(): AuthContextValue {
       profile: null,
       isAnonymous: false,
       isSignedInAccount: false,
+      isAdmin: false,
       isLoadingAuth: false,
       needsProfileCompletion: false,
       refreshProfile: async () => null,
+      refreshAdminClaim: async () => false,
       setProfileState: () => {},
       signOut: async () => {},
     };

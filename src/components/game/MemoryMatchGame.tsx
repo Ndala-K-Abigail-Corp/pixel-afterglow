@@ -46,6 +46,11 @@ import {
 import { MemoryMatchMultiplayerView } from './MemoryMatchMultiplayerView';
 import { MemorySymbolIcon } from './MemorySymbolIcon';
 import { useAudio } from '../../context/AudioContext';
+import { useAuth } from '../../context/AuthContext';
+import {
+  buildGameResultId,
+  recordPrivateSinglePlayerCompletion,
+} from '../../logic/gameHistory';
 
 interface MemoryMatchGameProps {
   onBackToHome: () => void;
@@ -53,6 +58,7 @@ interface MemoryMatchGameProps {
 
 export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }) => {
   const { playFlip, playMatch, playMismatch, playWin, playDraw, playReset, playClick } = useAudio();
+  const { uid, isSignedInAccount } = useAuth();
 
   // Screen phase: 'setup' lets user pick Mode & Difficulty; 'playing' renders the active board
   const [phase, setPhase] = useState<'setup' | 'playing'>('setup');
@@ -292,6 +298,37 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
             nextAttemptsUsed
           );
           setStats(updatedStats);
+
+          // Persist private single-player record for registered accounts (never touches multiplayer leaderboards)
+          if (isSignedInAccount && uid) {
+            const mismatches = Math.max(0, nextAttemptsUsed - totalPairs);
+            const completedAt = Date.now();
+            void recordPrivateSinglePlayerCompletion(uid, {
+              resultId: buildGameResultId({
+                gameId: 'memory-match',
+                mode: 'single-player',
+                sessionId: `sp_mm_${completedAt}_${currentSessionId}`,
+                playerUid: uid,
+              }),
+              gameId: 'memory-match',
+              sessionId: `sp_mm_${completedAt}_${currentSessionId}`,
+              playerUid: uid,
+              completedAt,
+              mode: 'single-player',
+              outcome: 'win',
+              score: totalPairs,
+              durationSeconds: mode === 'time-challenge' ? timeTaken : null,
+              validated: true,
+              metrics: {
+                pairsMatched: totalPairs,
+                totalPairs,
+                attempts: nextAttemptsUsed,
+                mismatches,
+                cardCount: totalPairs * 2,
+                difficulty,
+              },
+            });
+          }
           setLiveAnnouncement(
             `Matched ${secondCard.name}! All ${totalPairs} pairs matched! You win!`
           );
@@ -384,6 +421,9 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
       playWin,
       playDraw,
       clearAllAsyncTimers,
+      difficulty,
+      isSignedInAccount,
+      uid,
     ]
   );
 

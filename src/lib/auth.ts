@@ -7,10 +7,15 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   signInAnonymously,
   onAuthStateChanged,
+  onIdTokenChanged,
   GoogleAuthProvider,
   EmailAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
+  signInWithCredential,
   linkWithPopup,
+  linkWithRedirect,
+  getRedirectResult,
   linkWithCredential,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -139,10 +144,23 @@ export function subscribeToAuthChanges(
   return onAuthStateChanged(auth, onChange, onError);
 }
 
+/**
+ * Subscribes to Firebase Authentication ID token changes (including sign-in, sign-out,
+ * and automatic/forced token refreshes so revoked custom claims take effect promptly).
+ */
+export function subscribeToIdTokenChanges(
+  onChange: (user: User | null) => void,
+  onError?: (error: Error) => void
+): Unsubscribe {
+  const auth = getFirebaseAuth();
+  return onIdTokenChanged(auth, onChange, onError);
+}
+
 export interface AuthActionResult {
-  user: User;
+  user: User | null;
   linkedFromAnonymous: boolean;
   hadLinkingConflict?: boolean;
+  redirected?: boolean;
 }
 
 /**
@@ -183,11 +201,58 @@ export function mapAuthErrorToMessage(error: unknown): string {
   }
 }
 
+const PENDING_GOOGLE_REDIRECT_KEY = 'pixel_afterglow_pending_google_redirect';
+
+function shouldFallbackToRedirect(code: string): boolean {
+  return (
+    code === 'auth/popup-blocked' ||
+    code === 'auth/operation-not-supported-in-this-environment' ||
+    code === 'auth/unauthorized-domain'
+  );
+}
+
+function markPendingGoogleRedirect(): void {
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      window.sessionStorage.setItem(PENDING_GOOGLE_REDIRECT_KEY, '1');
+    }
+  } catch {
+    // Ignore storage restrictions
+  }
+}
+
+/**
+ * Resolves any pending Google Sign-In redirect result when returning to the app.
+ * Only calls `getRedirectResult` if a redirect sign-in was actually initiated in this tab.
+ */
+export async function resolvePendingAuthRedirect(): Promise<User | null> {
+  if (typeof window === 'undefined' || !isFirebaseConfigured()) return null;
+  let hasPending: boolean;
+  try {
+    hasPending = window.sessionStorage?.getItem(PENDING_GOOGLE_REDIRECT_KEY) === '1';
+    if (hasPending) {
+      window.sessionStorage.removeItem(PENDING_GOOGLE_REDIRECT_KEY);
+    }
+  } catch {
+    return null;
+  }
+  if (!hasPending) return null;
+
+  try {
+    const auth = getFirebaseAuth();
+    const res = await getRedirectResult(auth);
+    return res?.user ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Signs in with Google. If the user currently has an anonymous guest session,
  * attempts `linkWithPopup` first so their UID and active multiplayer rooms are preserved.
  * If the Google account already exists (`auth/credential-already-in-use`), falls back
  * safely to signing in with that Google account and signals `hadLinkingConflict: true`.
+ * If popups are blocked by browser/COOP policies, automatically falls back to redirect auth.
  */
 export async function signInWithGoogle(): Promise<AuthActionResult> {
   const auth = getFirebaseAuth();
@@ -205,12 +270,27 @@ export async function signInWithGoogle(): Promise<AuthActionResult> {
           ? String((err as { code?: unknown }).code ?? '')
           : '';
       if (code === 'auth/credential-already-in-use' || code === 'auth/email-already-in-use') {
-        const signedIn = await signInWithPopup(auth, provider);
-        return {
-          user: signedIn.user,
-          linkedFromAnonymous: false,
-          hadLinkingConflict: true,
-        };
+        // Use the credential already returned in the error to avoid opening a second popup
+        // (which browsers block because it runs after an async await).
+        const existingCredential = GoogleAuthProvider.credentialFromError(
+          err as Parameters<typeof GoogleAuthProvider.credentialFromError>[0]
+        );
+        if (existingCredential) {
+          const signedIn = await signInWithCredential(auth, existingCredential);
+          return {
+            user: signedIn.user,
+            linkedFromAnonymous: false,
+            hadLinkingConflict: true,
+          };
+        }
+        markPendingGoogleRedirect();
+        await signInWithRedirect(auth, provider);
+        return { user: null, linkedFromAnonymous: false, redirected: true };
+      }
+      if (shouldFallbackToRedirect(code)) {
+        markPendingGoogleRedirect();
+        await linkWithRedirect(current, provider);
+        return { user: null, linkedFromAnonymous: true, redirected: true };
       }
       throw new Error(mapAuthErrorToMessage(err), { cause: err });
     }
@@ -220,6 +300,15 @@ export async function signInWithGoogle(): Promise<AuthActionResult> {
     const result = await signInWithPopup(auth, provider);
     return { user: result.user, linkedFromAnonymous: false };
   } catch (err) {
+    const code =
+      err && typeof err === 'object' && 'code' in err
+        ? String((err as { code?: unknown }).code ?? '')
+        : '';
+    if (shouldFallbackToRedirect(code)) {
+      markPendingGoogleRedirect();
+      await signInWithRedirect(auth, provider);
+      return { user: null, linkedFromAnonymous: false, redirected: true };
+    }
     throw new Error(mapAuthErrorToMessage(err), { cause: err });
   }
 }
@@ -233,7 +322,7 @@ export async function registerWithEmailAndPassword(params: {
   email: string;
   password: string;
   displayName?: string;
-}): Promise<AuthActionResult> {
+}): Promise<{ user: User; linkedFromAnonymous: boolean }> {
   const auth = getFirebaseAuth();
   const trimmedEmail = params.email.trim();
   const current = auth.currentUser;

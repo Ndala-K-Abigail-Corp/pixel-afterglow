@@ -6,6 +6,7 @@
 import React from 'react';
 import { Play, ChevronDown } from 'lucide-react';
 import { HeroPixelScene } from '../pixel-art/HeroPixelScene';
+import { GAMES_CATALOG } from '../../data/games';
 import { useAudio } from '../../context/AudioContext';
 
 interface HeroProps {
@@ -14,6 +15,7 @@ interface HeroProps {
 
 export const Hero: React.FC<HeroProps> = ({ onLetsPlay }) => {
   const { playClick } = useAudio();
+  const playableGamesCount = GAMES_CATALOG.filter((g) => g.status === 'playable').length;
 
   const handlePlayClick = () => {
     playClick();
@@ -69,7 +71,9 @@ export const Hero: React.FC<HeroProps> = ({ onLetsPlay }) => {
           {/* Retro Micro Stats */}
           <div className="mt-8 sm:mt-10 pt-5 sm:pt-6 border-t border-[#292342] w-full grid grid-cols-3 gap-2 sm:gap-4 text-left">
             <div className="min-w-0">
-              <div className="font-pixel text-[10px] sm:text-xs text-[#FFC66D]">2 GAMES</div>
+              <div className="font-pixel text-[10px] sm:text-xs text-[#FFC66D]" data-testid="hero-playable-games-count">
+                {playableGamesCount} {playableGamesCount === 1 ? 'GAME' : 'GAMES'}
+              </div>
               <div className="text-[11px] text-[#FFF0D7]/60 mt-1 font-sans">Playable Now</div>
             </div>
             <div className="min-w-0">
