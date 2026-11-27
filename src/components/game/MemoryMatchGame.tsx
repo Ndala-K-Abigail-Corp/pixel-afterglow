@@ -45,6 +45,10 @@ import {
 } from '../../logic/multiplayerRoom';
 import { MemoryMatchMultiplayerView } from './MemoryMatchMultiplayerView';
 import { MemorySymbolIcon } from './MemorySymbolIcon';
+import {
+  MemoryBoardViewport,
+  useViewportOrientation,
+} from './MemoryBoardViewport';
 import { useAudio } from '../../context/AudioContext';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -87,6 +91,8 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [confirmExitTarget, setConfirmExitTarget] = useState<'setup' | 'home' | null>(null);
   const [liveAnnouncement, setLiveAnnouncement] = useState<string>('');
+  const [boardResetCount, setBoardResetCount] = useState<number>(0);
+  const orientation = useViewportOrientation();
 
   // Refs to prevent stale callbacks, duplicate timers, or multiple game-ending triggers
   const sessionIdRef = useRef<number>(0);
@@ -150,6 +156,7 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
       setIsNewRecord(false);
       setIsModalOpen(false);
       setConfirmExitTarget(null);
+      setBoardResetCount((c) => c + 1);
       setLiveAnnouncement(
         `Started ${targetMode === 'time-challenge' ? 'Time Challenge' : 'Limited Moves'} on ${
           targetConfig.label
@@ -458,8 +465,17 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
     }
   };
 
-  // Determine responsive grid classes based on difficulty (6, 8, or 10 pairs)
+  // Determine responsive & orientation-aware grid classes based on difficulty (6, 8, or 10 pairs)
   const getGridLayoutClasses = () => {
+    if (orientation.isCompactLandscape) {
+      if (difficulty === 'easy') {
+        return 'grid-cols-6 max-w-[620px]';
+      }
+      if (difficulty === 'hard') {
+        return 'grid-cols-5 sm:grid-cols-10 max-w-[780px]';
+      }
+      return 'grid-cols-8 max-w-[720px]';
+    }
     if (difficulty === 'easy') {
       // 12 cards: 3x4 on mobile, 4x3 on tablet/desktop
       return 'grid-cols-3 sm:grid-cols-4 max-w-[330px] sm:max-w-[440px]';
@@ -580,7 +596,7 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
 
             {/* Single Player vs Online Multiplayer Selector */}
             <div className="flex items-center justify-center mt-4">
-              <div className="bg-[#201A36] border border-[#3D345F] p-1 rounded-xl inline-flex items-center gap-1 shadow-md">
+              <div className="bg-[#201A36] border border-[#3D345F] p-1 rounded-xl inline-flex flex-wrap items-center justify-center gap-1 shadow-md max-w-full">
                 <button
                   type="button"
                   onClick={() => {
@@ -1036,7 +1052,12 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
           </div>
         )}
 
-        {/* Responsive Card Grid */}
+        {/* Responsive Card Grid with Local Zoom/Pan & Orientation Support */}
+        <MemoryBoardViewport
+          totalCards={config.totalCards}
+          resetKey={boardResetCount}
+          orientation={orientation}
+        >
         <div
           className={`grid ${getGridLayoutClasses()} gap-2 sm:gap-3 mx-auto select-none`}
           role="grid"
@@ -1115,6 +1136,7 @@ export const MemoryMatchGame: React.FC<MemoryMatchGameProps> = ({ onBackToHome }
             );
           })}
         </div>
+        </MemoryBoardViewport>
       </div>
 
       {/* Action Footer */}

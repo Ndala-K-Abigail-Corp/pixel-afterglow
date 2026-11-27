@@ -215,8 +215,9 @@ describe('Persistent Arcade Rooms, Board-Anchored Pixel Reactions, Country UI & 
     // Homepage shows footer
     expect(document.querySelector('footer')).toBeTruthy();
 
-    // Navigate to Arcade Rooms -> footer is removed (lazy-loaded view)
-    fireEvent.click(screen.getByTestId('navbar-arcade-rooms-btn'));
+    // Navigate to Arcade Rooms via mobile hamburger menu -> footer is removed (lazy-loaded view)
+    fireEvent.click(screen.getByTestId('navbar-hamburger-btn'));
+    fireEvent.click(screen.getByTestId('mobile-menu-arcade-rooms-btn'));
     expect(await screen.findByTestId('arcade-rooms-directory')).toBeTruthy();
     expect(document.querySelector('footer')).toBeNull();
   });

@@ -9,10 +9,6 @@ import {
   RotateCcw,
   Crown,
   AlertTriangle,
-  ChevronUp,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Skull,
   ShieldCheck,
 } from 'lucide-react';
@@ -32,6 +28,10 @@ import {
   type MultiplayerSnakeArenaState,
 } from '../../backend/snakeRealtimeEngine';
 import { pointKey, type SnakeDirection } from '../../logic/snake';
+import {
+  detectSwipeDirection,
+  type TouchPoint,
+} from '../../logic/snakeTouchControls';
 import { PixelAppleIcon } from './PixelAppleIcon';
 import { SnakeHeadSprite, SnakeBodySprite } from './SnakeCharacterSprites';
 import { useAudio } from '../../context/AudioContext';
@@ -86,6 +86,11 @@ export const SnakeMultiplayerView: React.FC<SnakeMultiplayerViewProps> = () => {
   const prevApplesByUidRef = useRef<Record<string, number>>({});
   const eatingUntilTickRef = useRef<Record<string, number>>({});
   const recordedSnakeSessionRef = useRef<string | null>(null);
+  const touchGestureRef = useRef<{
+    start: TouchPoint;
+    lastDirection: SnakeDirection | null;
+    handledInMove: boolean;
+  } | null>(null);
 
   const handleToggleReady = async (nextReady: boolean) => {
     if (!room) return;
@@ -250,6 +255,61 @@ export const SnakeMultiplayerView: React.FC<SnakeMultiplayerViewProps> = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [arena, sendDirection]);
 
+  const handleBoardTouchStart = (e: React.TouchEvent) => {
+    if (!arena || arena.status !== 'in_progress' || e.touches.length !== 1) {
+      touchGestureRef.current = null;
+      return;
+    }
+    const t = e.touches[0];
+    if (t) {
+      touchGestureRef.current = {
+        start: { x: t.clientX, y: t.clientY },
+        lastDirection: null,
+        handledInMove: false,
+      };
+    }
+  };
+
+  const handleBoardTouchMove = (e: React.TouchEvent) => {
+    const gesture = touchGestureRef.current;
+    if (!gesture || !arena || arena.status !== 'in_progress' || e.touches.length !== 1) {
+      return;
+    }
+    const t = e.touches[0];
+    if (!t) return;
+    const current: TouchPoint = { x: t.clientX, y: t.clientY };
+    const dir = detectSwipeDirection(gesture.start, current);
+    if (!dir) return;
+
+    if (e.cancelable) {
+      e.preventDefault();
+    }
+    gesture.start = current;
+    gesture.handledInMove = true;
+    if (dir !== gesture.lastDirection) {
+      gesture.lastDirection = dir;
+      sendDirection(dir);
+    }
+  };
+
+  const handleBoardTouchEnd = (e: React.TouchEvent) => {
+    const gesture = touchGestureRef.current;
+    touchGestureRef.current = null;
+    if (!gesture || gesture.handledInMove || !arena || arena.status !== 'in_progress') {
+      return;
+    }
+    const end = e.changedTouches[0];
+    if (!end) return;
+    const dir = detectSwipeDirection(gesture.start, { x: end.clientX, y: end.clientY });
+    if (dir && dir !== gesture.lastDirection) {
+      sendDirection(dir);
+    }
+  };
+
+  const handleBoardTouchCancel = () => {
+    touchGestureRef.current = null;
+  };
+
   // Waiting room or lobby when no active arena
   if (!room || !arena) {
     return (
@@ -389,8 +449,15 @@ export const SnakeMultiplayerView: React.FC<SnakeMultiplayerViewProps> = () => {
         </div>
       )}
 
-      {/* Shared 26x26 Multiplayer Arena */}
-      <div className="relative aspect-square w-full max-w-[520px] mx-auto rounded-2xl bg-[#120E24] border-2 border-[#56E0CB]/70 p-1.5 touch-none select-none overflow-hidden">
+      {/* Shared 26x26 Multiplayer Arena (Swipe directly on board on touch devices) */}
+      <div
+        onTouchStart={handleBoardTouchStart}
+        onTouchMove={handleBoardTouchMove}
+        onTouchEnd={handleBoardTouchEnd}
+        onTouchCancel={handleBoardTouchCancel}
+        data-testid="snake-mp-grid"
+        className="relative aspect-square w-full max-w-[520px] mx-auto rounded-2xl bg-[#120E24] border-2 border-[#56E0CB]/70 p-1.5 touch-none overscroll-none select-none overflow-hidden"
+      >
         <div
           className="grid w-full h-full gap-[1px]"
           style={{
@@ -491,43 +558,13 @@ export const SnakeMultiplayerView: React.FC<SnakeMultiplayerViewProps> = () => {
         )}
       </div>
 
-      {/* Mobile D-Pad */}
-      <div className="sm:hidden flex flex-col items-center gap-1.5" aria-label="Multiplayer Snake touch controls">
-        <button
-          type="button"
-          onClick={() => sendDirection('up')}
-          className="w-12 h-12 rounded-xl bg-[#292342] border border-[#56E0CB]/60 flex items-center justify-center text-[#56E0CB]"
-          aria-label="Move up"
-        >
-          <ChevronUp className="w-6 h-6" />
-        </button>
-        <div className="flex items-center gap-6">
-          <button
-            type="button"
-            onClick={() => sendDirection('left')}
-            className="w-12 h-12 rounded-xl bg-[#292342] border border-[#56E0CB]/60 flex items-center justify-center text-[#56E0CB]"
-            aria-label="Move left"
-          >
-            <ChevronLeft className="w-6 h-6" />
-          </button>
-          <button
-            type="button"
-            onClick={() => sendDirection('right')}
-            className="w-12 h-12 rounded-xl bg-[#292342] border border-[#56E0CB]/60 flex items-center justify-center text-[#56E0CB]"
-            aria-label="Move right"
-          >
-            <ChevronRight className="w-6 h-6" />
-          </button>
-        </div>
-        <button
-          type="button"
-          onClick={() => sendDirection('down')}
-          className="w-12 h-12 rounded-xl bg-[#292342] border border-[#56E0CB]/60 flex items-center justify-center text-[#56E0CB]"
-          aria-label="Move down"
-        >
-          <ChevronDown className="w-6 h-6" />
-        </button>
-      </div>
+      {/* Subtle Mobile Swipe Hint */}
+      <p
+        className="sm:hidden text-center text-[11px] text-[#FFF0D7]/55"
+        data-testid="snake-mp-swipe-hint"
+      >
+        Swipe directly on the arena to steer
+      </p>
 
       <RoomSocialBar room={room} uid={uid} isHost={isHost} compact={true} anchorMode="board" />
     </div>

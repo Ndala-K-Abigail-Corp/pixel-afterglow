@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Play, ChevronDown } from 'lucide-react';
+import { Play } from 'lucide-react';
 import { HeroPixelScene } from '../pixel-art/HeroPixelScene';
 import { GAMES_CATALOG } from '../../data/games';
 import { useAudio } from '../../context/AudioContext';
@@ -58,14 +58,6 @@ export const Hero: React.FC<HeroProps> = ({ onLetsPlay }) => {
               <Play className="w-4 h-4 fill-[#171329] shrink-0" />
               <span>LET'S PLAY</span>
             </button>
-
-            <a
-              href="#game-collection"
-              className="flex items-center justify-center gap-2 px-6 py-3.5 sm:py-4 bg-[#292342] hover:bg-[#322B50] text-[#FFF0D7] border border-[#3D345F] hover:border-[#56E0CB] text-xs font-semibold rounded-xl transition-colors"
-            >
-              <span>Explore Collection</span>
-              <ChevronDown className="w-4 h-4 text-[#56E0CB] shrink-0" />
-            </a>
           </div>
 
           {/* Retro Micro Stats */}

@@ -12,10 +12,6 @@ import {
   Trophy,
   Globe,
   User,
-  ChevronUp,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Zap,
   ShieldAlert,
   Clock,
@@ -49,6 +45,10 @@ import {
   hasRoomInvitationInUrl,
   loadActiveRoomSession,
 } from '../../logic/multiplayerRoom';
+import {
+  detectSwipeDirection,
+  type TouchPoint,
+} from '../../logic/snakeTouchControls';
 
 export interface SnakeGameProps {
   onBackToHome: () => void;
@@ -74,7 +74,11 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
   const [visualTick, setVisualTick] = useState<number>(0);
   const [eatAnimTicks, setEatAnimTicks] = useState<number>(0);
 
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const touchGestureRef = useRef<{
+    start: TouchPoint;
+    lastDirection: SnakeDirection | null;
+    handledInMove: boolean;
+  } | null>(null);
   const recordedGameOverRef = useRef<boolean>(false);
   const sessionCounterRef = useRef<number>(1);
   const prevScoreRef = useRef<number>(0);
@@ -239,23 +243,64 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
   }, [isOnlineMultiplayer, phase, handleDirectionInput, handleTogglePause]);
 
   const handleTouchStart = (e: React.TouchEvent) => {
+    if (gameState.isGameOver || gameState.isPaused || e.touches.length !== 1) {
+      touchGestureRef.current = null;
+      return;
+    }
     const t = e.touches[0];
-    if (t) touchStartRef.current = { x: t.clientX, y: t.clientY };
+    if (t) {
+      touchGestureRef.current = {
+        start: { x: t.clientX, y: t.clientY },
+        lastDirection: null,
+        handledInMove: false,
+      };
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    const gesture = touchGestureRef.current;
+    if (!gesture || gameState.isGameOver || gameState.isPaused || e.touches.length !== 1) {
+      return;
+    }
+    const t = e.touches[0];
+    if (!t) return;
+
+    const current: TouchPoint = { x: t.clientX, y: t.clientY };
+    const dir = detectSwipeDirection(gesture.start, current);
+    if (!dir) return;
+
+    // Prevent page scrolling once a valid gameplay swipe is detected
+    if (e.cancelable) {
+      e.preventDefault();
+    }
+
+    // Re-anchor start point so fluid continuous turns (e.g. right -> down) work smoothly
+    gesture.start = current;
+    gesture.handledInMove = true;
+
+    if (dir !== gesture.lastDirection) {
+      gesture.lastDirection = dir;
+      handleDirectionInput(dir);
+    }
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    const start = touchStartRef.current;
-    const end = e.changedTouches[0];
-    touchStartRef.current = null;
-    if (!start || !end) return;
-    const dx = end.clientX - start.x;
-    const dy = end.clientY - start.y;
-    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
-    if (Math.abs(dx) > Math.abs(dy)) {
-      handleDirectionInput(dx > 0 ? 'right' : 'left');
-    } else {
-      handleDirectionInput(dy > 0 ? 'down' : 'up');
+    const gesture = touchGestureRef.current;
+    touchGestureRef.current = null;
+    if (!gesture || gesture.handledInMove || gameState.isGameOver || gameState.isPaused) {
+      return;
     }
+    const end = e.changedTouches[0];
+    if (!end) return;
+
+    const dir = detectSwipeDirection(gesture.start, { x: end.clientX, y: end.clientY });
+    if (dir && dir !== gesture.lastDirection) {
+      handleDirectionInput(dir);
+    }
+  };
+
+  const handleTouchCancel = () => {
+    touchGestureRef.current = null;
   };
 
   const snakeHeadKey = pointKey(gameState.snake[0]);
@@ -345,7 +390,7 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
               <Zap className="w-3.5 h-3.5" />
               <span>1. Speed Mode</span>
             </label>
-            <div className="grid grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5">
               {(['slow', 'fast', 'flash'] as SnakeSpeedMode[]).map((sKey) => {
                 const cfg = SNAKE_SPEED_CONFIGS[sKey];
                 const active = speed === sKey;
@@ -359,14 +404,14 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
                     }}
                     data-testid={`snake-speed-${sKey}`}
                     aria-pressed={active}
-                    className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                    className={`p-2 sm:p-3 rounded-xl border-2 text-left transition-all cursor-pointer min-w-0 ${
                       active
                         ? 'bg-[#292342] border-[#56E0CB]'
                         : 'bg-[#171329] border-[#3D345F] hover:border-[#56E0CB]/50'
                     }`}
                   >
-                    <p className="font-bold text-sm text-[#FFF0D7]">{cfg.label}</p>
-                    <p className="text-[11px] text-[#FFF0D7]/65 mt-0.5">{cfg.description}</p>
+                    <p className="font-bold text-xs sm:text-sm text-[#FFF0D7] truncate">{cfg.label}</p>
+                    <p className="text-[10px] sm:text-[11px] text-[#FFF0D7]/65 mt-0.5 leading-snug">{cfg.description}</p>
                   </button>
                 );
               })}
@@ -379,7 +424,7 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
               <ShieldAlert className="w-3.5 h-3.5" />
               <span>2. Difficulty (Obstacles)</span>
             </label>
-            <div className="grid grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5">
               {(['easy', 'hard', 'difficult'] as SnakeDifficultyLevel[]).map((dKey) => {
                 const cfg = SNAKE_DIFFICULTY_CONFIGS[dKey];
                 const active = difficulty === dKey;
@@ -393,14 +438,14 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
                     }}
                     data-testid={`snake-difficulty-${dKey}`}
                     aria-pressed={active}
-                    className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                    className={`p-2 sm:p-3 rounded-xl border-2 text-left transition-all cursor-pointer min-w-0 ${
                       active
                         ? 'bg-[#292342] border-[#FFC66D]'
                         : 'bg-[#171329] border-[#3D345F] hover:border-[#FFC66D]/50'
                     }`}
                   >
-                    <p className="font-bold text-sm text-[#FFF0D7]">{cfg.label}</p>
-                    <p className="text-[11px] text-[#FFF0D7]/65 mt-0.5">{cfg.description}</p>
+                    <p className="font-bold text-xs sm:text-sm text-[#FFF0D7] truncate">{cfg.label}</p>
+                    <p className="text-[10px] sm:text-[11px] text-[#FFF0D7]/65 mt-0.5 leading-snug">{cfg.description}</p>
                   </button>
                 );
               })}
@@ -435,32 +480,32 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
         /* Active Single-Player Arena */
         <div className="max-w-xl mx-auto space-y-3" data-testid="snake-active-arena">
           {/* HUD */}
-          <div className="grid grid-cols-4 gap-2 text-center">
-            <div className="p-2.5 rounded-xl bg-[#201A36] border border-[#3D345F]">
-              <p className="text-[10px] uppercase text-[#FFF0D7]/60">Score</p>
-              <p className="font-['Press_Start_2P'] text-sm text-[#56E0CB] mt-1" data-testid="snake-score">
+          <div className="grid grid-cols-4 gap-1.5 sm:gap-2 text-center">
+            <div className="p-2 sm:p-2.5 rounded-xl bg-[#201A36] border border-[#3D345F] min-w-0">
+              <p className="text-[9px] sm:text-[10px] uppercase text-[#FFF0D7]/60">Score</p>
+              <p className="font-['Press_Start_2P'] text-xs sm:text-sm text-[#56E0CB] mt-1 truncate" data-testid="snake-score">
                 {gameState.score}
               </p>
             </div>
-            <div className="p-2.5 rounded-xl bg-[#201A36] border border-[#3D345F]">
-              <p className="text-[10px] uppercase text-[#FFF0D7]/60 inline-flex items-center gap-1">
-                <Apple className="w-3 h-3 text-[#FF776E]" /> Food
+            <div className="p-2 sm:p-2.5 rounded-xl bg-[#201A36] border border-[#3D345F] min-w-0">
+              <p className="text-[9px] sm:text-[10px] uppercase text-[#FFF0D7]/60 inline-flex items-center justify-center gap-0.5 sm:gap-1">
+                <Apple className="w-3 h-3 text-[#FF776E] shrink-0" /> Food
               </p>
-              <p className="font-['Press_Start_2P'] text-sm text-[#FF776E] mt-1">
+              <p className="font-['Press_Start_2P'] text-xs sm:text-sm text-[#FF776E] mt-1 truncate">
                 {gameState.applesCollected}
               </p>
             </div>
-            <div className="p-2.5 rounded-xl bg-[#201A36] border border-[#3D345F]">
-              <p className="text-[10px] uppercase text-[#FFF0D7]/60">Length</p>
-              <p className="font-['Press_Start_2P'] text-sm text-[#FFC66D] mt-1">
+            <div className="p-2 sm:p-2.5 rounded-xl bg-[#201A36] border border-[#3D345F] min-w-0">
+              <p className="text-[9px] sm:text-[10px] uppercase text-[#FFF0D7]/60">Length</p>
+              <p className="font-['Press_Start_2P'] text-xs sm:text-sm text-[#FFC66D] mt-1 truncate">
                 {gameState.snake.length}
               </p>
             </div>
-            <div className="p-2.5 rounded-xl bg-[#201A36] border border-[#3D345F]">
-              <p className="text-[10px] uppercase text-[#FFF0D7]/60 inline-flex items-center gap-1">
-                <Clock className="w-3 h-3 text-[#56E0CB]" /> Time
+            <div className="p-2 sm:p-2.5 rounded-xl bg-[#201A36] border border-[#3D345F] min-w-0">
+              <p className="text-[9px] sm:text-[10px] uppercase text-[#FFF0D7]/60 inline-flex items-center justify-center gap-0.5 sm:gap-1">
+                <Clock className="w-3 h-3 text-[#56E0CB] shrink-0" /> Time
               </p>
-              <p className="font-['Press_Start_2P'] text-sm text-[#FFF0D7] mt-1">
+              <p className="font-['Press_Start_2P'] text-xs sm:text-sm text-[#FFF0D7] mt-1 truncate">
                 {gameState.elapsedSeconds}s
               </p>
             </div>
@@ -506,11 +551,13 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
             </div>
           </div>
 
-          {/* 20x20 Neon Grid */}
+          {/* 20x20 Neon Grid (Direct Swipe Steering on Touch Devices) */}
           <div
             onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
-            className="relative aspect-square w-full max-w-[460px] mx-auto rounded-2xl bg-[#120E24] border-2 border-[#56E0CB]/60 p-1.5 touch-none select-none overflow-hidden"
+            onTouchCancel={handleTouchCancel}
+            className="relative aspect-square w-full max-w-[460px] mx-auto rounded-2xl bg-[#120E24] border-2 border-[#56E0CB]/60 p-1.5 touch-none overscroll-none select-none overflow-hidden"
             data-testid="snake-grid"
           >
             <div
@@ -584,7 +631,7 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
             {/* Game Over Results Overlay */}
             {gameState.isGameOver && (
               <div
-                className="absolute inset-0 bg-[#171329]/90 flex flex-col items-center justify-center p-5 text-center space-y-3"
+                className="absolute inset-0 bg-[#171329]/92 flex flex-col items-center justify-center p-3.5 sm:p-5 text-center space-y-2.5 sm:space-y-3 overflow-y-auto"
                 data-testid="snake-gameover-overlay"
               >
                 <p className="font-['Press_Start_2P'] text-sm text-[#FF776E]">
@@ -638,43 +685,13 @@ export const SnakeGame: React.FC<SnakeGameProps> = ({ onBackToHome }) => {
             )}
           </div>
 
-          {/* Mobile Touch-Friendly D-Pad */}
-          <div className="sm:hidden flex flex-col items-center gap-1.5 pt-1" aria-label="Touch directional controls">
-            <button
-              type="button"
-              onClick={() => handleDirectionInput('up')}
-              aria-label="Move up"
-              className="w-12 h-12 rounded-xl bg-[#292342] border border-[#56E0CB]/60 flex items-center justify-center text-[#56E0CB] active:bg-[#56E0CB] active:text-[#171329] touch-manipulation"
-            >
-              <ChevronUp className="w-6 h-6" />
-            </button>
-            <div className="flex items-center gap-6">
-              <button
-                type="button"
-                onClick={() => handleDirectionInput('left')}
-                aria-label="Move left"
-                className="w-12 h-12 rounded-xl bg-[#292342] border border-[#56E0CB]/60 flex items-center justify-center text-[#56E0CB] active:bg-[#56E0CB] active:text-[#171329] touch-manipulation"
-              >
-                <ChevronLeft className="w-6 h-6" />
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDirectionInput('right')}
-                aria-label="Move right"
-                className="w-12 h-12 rounded-xl bg-[#292342] border border-[#56E0CB]/60 flex items-center justify-center text-[#56E0CB] active:bg-[#56E0CB] active:text-[#171329] touch-manipulation"
-              >
-                <ChevronRight className="w-6 h-6" />
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={() => handleDirectionInput('down')}
-              aria-label="Move down"
-              className="w-12 h-12 rounded-xl bg-[#292342] border border-[#56E0CB]/60 flex items-center justify-center text-[#56E0CB] active:bg-[#56E0CB] active:text-[#171329] touch-manipulation"
-            >
-              <ChevronDown className="w-6 h-6" />
-            </button>
-          </div>
+          {/* Subtle Mobile Swipe Hint (D-pad removed to maximize board space) */}
+          <p
+            className="sm:hidden text-center text-[11px] text-[#FFF0D7]/55"
+            data-testid="snake-swipe-hint"
+          >
+            Swipe directly on the board to steer
+          </p>
         </div>
       )}
     </div>

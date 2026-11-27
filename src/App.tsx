@@ -330,7 +330,7 @@ function AppShell() {
               <button
                 type="button"
                 onClick={() => handleSelectDashboardSection('arcade-home')}
-                className="font-['Press_Start_2P'] text-[10px] text-[#FFF0D7] truncate cursor-pointer"
+                className="font-['Press_Start_2P'] text-[10px] text-[#FFF0D7] whitespace-nowrap truncate cursor-pointer"
               >
                 PIXEL AFTERGLOW
               </button>
@@ -477,7 +477,7 @@ function AppShell() {
             }}
             onOpenFeedback={() => handleOpenFeedback('other', null)}
             hasUnreadWhatsNew={hasUnreadWhatsNew}
-            onOpenDashboard={() => handleOpenDashboard('arcade-home')}
+            onOpenDashboard={(section) => handleOpenDashboard(section ?? 'arcade-home')}
             onOpenAbout={() => setIsAboutOpen(true)}
             onOpenAuth={() => setIsAuthModalOpen(true)}
           />
