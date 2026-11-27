@@ -17,13 +17,13 @@ export const Footer: React.FC<FooterProps> = ({
   githubRepoUrl = 'https://github.com/Ndala-K-Abigail-Corp/pixel-afterglow',
 }) => {
   return (
-    <footer className="mt-20 border-t border-[#292342] bg-[#171329] text-[#FFF0D7] py-12 px-4 md:px-8">
-      <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
+    <footer className="mt-10 sm:mt-16 md:mt-20 border-t border-[#292342] bg-[#171329] text-[#FFF0D7] py-8 sm:py-12 px-4 md:px-8">
+      <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-6 sm:gap-8">
         {/* Brand Info */}
-        <div className="max-w-md">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="font-pixel text-sm text-[#FFF0D7] tracking-tight">PIXEL AFTERGLOW</span>
-            <span className="text-xs px-2 py-0.5 rounded bg-[#292342] text-[#FFC66D] font-mono border border-[#3D345F]">
+        <div className="max-w-md min-w-0">
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            <span className="font-pixel text-xs sm:text-sm text-[#FFF0D7] tracking-tight whitespace-nowrap">PIXEL AFTERGLOW</span>
+            <span className="text-xs px-2 py-0.5 rounded bg-[#292342] text-[#FFC66D] font-mono border border-[#3D345F] shrink-0">
               MVP v1.0
             </span>
           </div>

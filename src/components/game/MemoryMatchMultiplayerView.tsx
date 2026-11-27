@@ -50,6 +50,11 @@ import {
   togglePlayerReady,
 } from '../../logic/multiplayerRoom';
 import { MemorySymbolIcon } from './MemorySymbolIcon';
+import {
+  MemoryBoardViewport,
+  useViewportOrientation,
+} from './MemoryBoardViewport';
+import { getMultiplayerMemoryGridClasses } from '../../logic/memoryBoardViewport';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
 import { useAudio } from '../../context/AudioContext';
@@ -106,6 +111,7 @@ export const MemoryMatchMultiplayerView: React.FC<
   const [roundTransitionText, setRoundTransitionText] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const orientation = useViewportOrientation();
 
   const prevStatusRef = useRef<string | null>(null);
   const prevMatchedPairsRef = useRef<number>(0);
@@ -494,32 +500,13 @@ export const MemoryMatchMultiplayerView: React.FC<
     .map((wUid) => room.players[wUid]?.nickname || 'Player')
     .join(' & ');
 
-  // Responsive grid layout for any even card count from 10 to 100:
-  // - Small mobile (<640px): 4 cols (10–20 cards) or 5 cols (22–100 cards) dynamically filling viewport width
-  // - Tablet (640px–767px): 5 cols (<=20) or 8 cols (22–100) for comfortable touch targets
-  // - Tablet/Desktop (>=768px): 5 cols (<=20), 8 cols (22–40), 10 cols (42–100, preserving 10x10 for 100)
-  const gridClasses =
-    totalCards <= 20
-      ? 'grid-cols-4 sm:grid-cols-5 w-full max-w-[380px] sm:max-w-[540px] gap-1.5 sm:gap-2.5'
-      : totalCards <= 40
-      ? 'grid-cols-5 sm:grid-cols-8 w-full max-w-[460px] sm:max-w-[740px] gap-1 sm:gap-2'
-      : totalCards <= 60
-      ? 'grid-cols-5 sm:grid-cols-8 md:grid-cols-10 w-full sm:max-w-[740px] md:max-w-[880px] gap-1 sm:gap-1.5'
-      : 'grid-cols-5 sm:grid-cols-8 md:grid-cols-10 w-full sm:max-w-[760px] md:max-w-[920px] gap-1 sm:gap-1.5 lg:gap-2';
-
-  const cardAspectClass =
-    totalCards <= 20
-      ? 'aspect-square rounded-lg sm:rounded-xl'
-      : totalCards <= 40
-      ? 'aspect-[5/4] min-h-[42px] sm:min-h-0 sm:aspect-square rounded-lg sm:rounded-xl'
-      : 'aspect-[4/3] min-h-[42px] sm:min-h-0 sm:aspect-square rounded-md sm:rounded-xl';
-
-  const iconSizeClass =
-    totalCards <= 20
-      ? 'w-8 h-8 sm:w-10 sm:h-10'
-      : totalCards <= 40
-      ? 'w-6 h-6 sm:w-8 sm:h-8'
-      : 'w-6 h-6 sm:w-7 sm:h-7';
+  // Responsive & orientation-aware grid layout for 20, 40, 60, and 100-card boards:
+  // Portrait/desktop preserves 4/5-col mobile, 8-col sm, 10-col md+ desktop.
+  // Compact mobile landscape expands columns to use horizontal space efficiently.
+  const { gridClasses, cardAspectClass, iconSizeClass } = getMultiplayerMemoryGridClasses({
+    totalCards,
+    isCompactLandscape: orientation.isCompactLandscape,
+  });
 
   const scoreboardGridCols =
     orderedPlayers.length === 2
@@ -939,8 +926,13 @@ export const MemoryMatchMultiplayerView: React.FC<
         </div>
       )}
 
-      {/* Shared Memory Match Card Grid + Docked Board-Anchored Reaction Toolbar */}
+      {/* Shared Memory Match Card Grid (Local Zoom/Pan/Orientation Viewport) + Docked Board-Anchored Reaction Toolbar */}
       <div className="relative w-full" data-testid="memory-board-and-reactions">
+        <MemoryBoardViewport
+          totalCards={totalCards}
+          resetKey={`${room.roomCode}_${mm.roundNumber ?? 1}`}
+          orientation={orientation}
+        >
         <div
           className={`grid ${gridClasses} mx-auto bg-[#201A36] border-2 sm:border-4 border-[#292342] rounded-xl sm:rounded-2xl p-1.5 sm:p-3 md:p-4 shadow-2xl`}
           role="grid"
@@ -1044,6 +1036,7 @@ export const MemoryMatchMultiplayerView: React.FC<
           );
         })}
         </div>
+        </MemoryBoardViewport>
 
         {/* Board-Docked Reaction Toolbar & Compact Floating Chat */}
         <RoomSocialBar room={room} uid={uid} isHost={isHost} compact={true} anchorMode="board" />

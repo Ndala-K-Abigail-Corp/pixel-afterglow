@@ -33,6 +33,8 @@ body {
   width: 100%;
   max-width: 100vw;
   -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 /* Retro Pixel Button & Box Shadow Styles */

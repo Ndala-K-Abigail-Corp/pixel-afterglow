@@ -150,7 +150,7 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
 
   return (
     <div
-      className={`relative w-full max-w-4xl mx-auto ${compact ? 'mt-2 sm:mt-3' : 'mt-3 sm:mt-4'}`}
+      className={`relative w-full max-w-4xl mx-auto pb-16 sm:pb-6 ${compact ? 'mt-2 sm:mt-3' : 'mt-3 sm:mt-4'}`}
       data-testid="room-social-bar"
     >
       {/* Board-Anchored Non-Blocking Arcade Reaction Overlay */}
@@ -287,7 +287,7 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
         aria-expanded={isChatOpen}
         aria-label={isChatOpen ? 'Close room chat' : 'Open room chat'}
         data-testid="room-chat-toggle"
-        className={`fixed bottom-4 right-4 sm:bottom-5 sm:right-5 z-40 inline-flex items-center gap-2 px-4 py-3 min-h-[46px] rounded-full border-2 text-xs sm:text-sm font-bold shadow-[0_8px_28px_rgba(14,10,30,0.82)] transition-all cursor-pointer touch-manipulation ${
+        className={`fixed bottom-[max(0.85rem,env(safe-area-inset-bottom))] right-3 sm:bottom-5 sm:right-5 z-40 inline-flex items-center gap-2 px-3.5 sm:px-4 py-2.5 sm:py-3 min-h-[44px] rounded-full border-2 text-xs sm:text-sm font-bold shadow-[0_8px_28px_rgba(14,10,30,0.82)] transition-all cursor-pointer touch-manipulation ${
           isChatOpen
             ? 'bg-[#56E0CB] text-[#171329] border-[#56E0CB]'
             : 'bg-[#201A36] hover:bg-[#292342] text-[#56E0CB] border-[#56E0CB]/80'
