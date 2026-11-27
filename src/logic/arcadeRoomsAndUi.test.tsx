@@ -5,8 +5,8 @@
  */
 
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import {
   buildPersistentArcadeRoom,
   buildArcadeRoomInvitationUrl,
@@ -44,6 +44,10 @@ describe('Persistent Arcade Rooms, Board-Anchored Pixel Reactions, Country UI & 
     vi.mocked(getCurrentUser).mockReset();
     vi.mocked(getCurrentUser).mockReturnValue(null);
     window.history.replaceState({}, '', '/');
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it('builds a valid Level-1 persistent arcade room separate from Level-2 game sessions', () => {
