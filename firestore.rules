@@ -19,7 +19,7 @@ service cloud.firestore {
       return (fromStatus == toStatus)
         || (fromStatus == 'waiting' && toStatus in ['in_progress', 'closed', 'expired'])
         || (fromStatus == 'in_progress' && toStatus in ['completed', 'closed', 'expired'])
-        || (fromStatus == 'completed' && toStatus in ['in_progress', 'closed', 'expired'])
+        || (fromStatus == 'completed' && toStatus in ['waiting', 'in_progress', 'closed', 'expired'])
         || (fromStatus == 'closed' && toStatus == 'expired');
     }
 
@@ -285,6 +285,21 @@ service cloud.firestore {
         : 20;
     }
 
+    // Host returning a completed room back to the waiting room so existing players stay
+    // and new players can join before the next round starts.
+    function isValidReturnToWaitingRoom() {
+      return resource.data.status == 'completed'
+        && request.resource.data.status == 'waiting'
+        && isRoomHost(resource.data)
+        && roomSettingsUnchanged()
+        && request.resource.data.playerOrder == resource.data.playerOrder
+        && request.resource.data.players.diff(resource.data.players).addedKeys().size() == 0
+        && request.resource.data.players.diff(resource.data.players).removedKeys().size() == 0
+        && request.resource.data.currentTurnUid == null
+        && request.resource.data.ticTacToeState == null
+        && request.resource.data.memoryMatchState == null;
+    }
+
     // Host starting the next Memory Match round immediately using the latest saved room settings:
     // fresh deck matching expectedCardCountForRoom, scores zeroed, ownership cleared, round incremented.
     function isValidMemoryMatchRematchStart() {
@@ -325,19 +340,72 @@ service cloud.firestore {
         && (order.size() < 8 || rematchPlayerReset(order[7]));
     }
 
+    // Host completing an active Multiplayer Snake match with authoritative round outcome summary.
+    function isValidSnakeRoomCompletion() {
+      return resource.data.gameType == 'snake'
+        && isRoomHost(resource.data)
+        && resource.data.status == 'in_progress'
+        && request.resource.data.status == 'completed'
+        && request.resource.data.playerOrder == resource.data.playerOrder
+        && request.resource.data.ticTacToeState == resource.data.ticTacToeState
+        && request.resource.data.memoryMatchState == resource.data.memoryMatchState
+        && ('snakeMatchResult' in request.resource.data)
+        && request.resource.data.snakeMatchResult is map
+        && request.resource.data.snakeMatchResult.sessionId is string
+        && request.resource.data.snakeMatchResult.roundNumber is int
+        && request.resource.data.snakeMatchResult.winnerUids is list
+        && request.resource.data.snakeMatchResult.isDraw is bool
+        && request.resource.data.snakeMatchResult.completedAt is number;
+    }
+
+    // Verifies that a player's recorded multiplayer outcome matches the actual completed room state.
+    function isValidCompletedRoomOutcome(roomData, gameId, outcome) {
+      return (
+        gameId == 'tic-tac-toe'
+        && roomData.ticTacToeState != null
+        && (
+          (outcome == 'draw' && roomData.ticTacToeState.isDraw == true)
+          || (outcome == 'win' && roomData.ticTacToeState.isDraw == false && roomData.ticTacToeState.winnerUid == request.auth.uid)
+          || (outcome == 'loss' && roomData.ticTacToeState.isDraw == false && roomData.ticTacToeState.winnerUid != null && roomData.ticTacToeState.winnerUid != request.auth.uid)
+        )
+      ) || (
+        gameId == 'memory-match'
+        && roomData.memoryMatchState != null
+        && (
+          (outcome == 'draw' && roomData.memoryMatchState.isTie == true)
+          || (outcome == 'win' && roomData.memoryMatchState.isTie == false && (request.auth.uid in roomData.memoryMatchState.winnerUids))
+          || (outcome == 'loss' && roomData.memoryMatchState.isTie == false && !(request.auth.uid in roomData.memoryMatchState.winnerUids))
+        )
+      ) || (
+        gameId == 'snake'
+        && ('snakeMatchResult' in roomData)
+        && roomData.snakeMatchResult != null
+        && (
+          (outcome == 'draw' && roomData.snakeMatchResult.isDraw == true)
+          || (outcome == 'win' && roomData.snakeMatchResult.isDraw == false && (request.auth.uid in roomData.snakeMatchResult.winnerUids))
+          || (outcome == 'loss' && roomData.snakeMatchResult.isDraw == false && !(request.auth.uid in roomData.snakeMatchResult.winnerUids))
+        )
+      );
+    }
+
     match /rooms/{roomCode} {
-      // Authenticated players may read room state to join by code or listen to active room updates
-      allow read: if isSignedIn();
+      // Authenticated players may fetch a room by known roomCode to join or subscribe,
+      // while collection listing is restricted strictly to rooms the caller belongs to.
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && (request.auth.uid in resource.data.players);
 
       // Room creation: creator must be authenticated, set themselves as host, and start in 'waiting'
       allow create: if isSignedIn()
         && request.resource.data.roomCode == roomCode
         && request.resource.data.hostUid == request.auth.uid
         && request.resource.data.status == 'waiting'
-        && request.resource.data.gameType in ['tic-tac-toe', 'memory-match']
-        && request.resource.data.maxPlayers in [2, 3, 4, 5, 6, 7, 8]
+        && request.resource.data.gameType in ['tic-tac-toe', 'memory-match', 'snake']
+        && request.resource.data.maxPlayers is int
+        && request.resource.data.maxPlayers >= 2
+        && request.resource.data.maxPlayers <= 10
         && (
           (request.resource.data.gameType == 'tic-tac-toe' && request.resource.data.maxPlayers == 2)
+          || (request.resource.data.gameType == 'snake' && request.resource.data.maxPlayers >= 2 && request.resource.data.maxPlayers <= 10)
           || (
             request.resource.data.gameType == 'memory-match'
             && ('memoryRoomSettings' in request.resource.data)
@@ -416,6 +484,9 @@ service cloud.firestore {
             )
           )
           ||
+          // 4b. Host returning a completed match back to the waiting room before next round
+          isValidReturnToWaitingRoom()
+          ||
           // 5. Active gameplay updates (settings strictly locked; turn-validated moves, heartbeats, or mismatch resets)
           (
             roomSettingsUnchanged()
@@ -444,6 +515,9 @@ service cloud.firestore {
               ||
               // 5d. Room member skipping an inactive/disconnected player's turn without altering scores/matches
               isValidMemoryMatchTurnSkip()
+              ||
+              // 5e. Host completing an active Multiplayer Snake match
+              isValidSnakeRoomCompletion()
             )
           )
           ||
@@ -538,9 +612,10 @@ service cloud.firestore {
       }
     }
 
-    // Persistent player profiles: owner-only create/update, protected immutable fields & stats
+    // Persistent player profiles: owner-only & admin reads (protects player emails from other players)
     match /users/{userId} {
-      allow read: if isSignedIn();
+      allow get: if (isSignedIn() && request.auth.uid == userId) || isAdmin();
+      allow list: if isAdmin();
       allow create: if isSignedIn()
         && request.auth.uid == userId
         && request.resource.data.uid == request.auth.uid
@@ -568,6 +643,145 @@ service cloud.firestore {
         && request.resource.data.countryCode.matches('^[A-Z]{2}$')
         && request.resource.data.updatedAt is number;
       allow delete: if false;
+
+      // Validated competitive multiplayer statistics (strictly tied to an atomic verified gameHistory write)
+      match /gameStats/{gameId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isRegisteredUser()
+          && request.auth.uid == userId
+          && gameId in ['memory-match', 'tic-tac-toe', 'snake']
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.gameId == gameId
+          && request.resource.data.lastResultId is string
+          && existsAfter(/databases/$(database)/documents/users/$(userId)/gameHistory/$(request.resource.data.lastResultId))
+          && request.resource.data.multiplayer.gamesPlayed == 1
+          && request.resource.data.multiplayer.wins in [0, 1]
+          && request.resource.data.multiplayer.losses in [0, 1]
+          && request.resource.data.multiplayer.draws in [0, 1]
+          && (request.resource.data.multiplayer.wins + request.resource.data.multiplayer.losses + request.resource.data.multiplayer.draws) == 1
+          && request.resource.data.updatedAt is number;
+        allow update: if isRegisteredUser()
+          && request.auth.uid == userId
+          && gameId in ['memory-match', 'tic-tac-toe', 'snake']
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.gameId == resource.data.gameId
+          && request.resource.data.lastResultId is string
+          && request.resource.data.lastResultId != resource.data.lastResultId
+          && existsAfter(/databases/$(database)/documents/users/$(userId)/gameHistory/$(request.resource.data.lastResultId))
+          && request.resource.data.multiplayer.gamesPlayed == resource.data.multiplayer.gamesPlayed + 1
+          && (request.resource.data.multiplayer.wins - resource.data.multiplayer.wins) in [0, 1]
+          && (request.resource.data.multiplayer.losses - resource.data.multiplayer.losses) in [0, 1]
+          && (request.resource.data.multiplayer.draws - resource.data.multiplayer.draws) in [0, 1]
+          && (request.resource.data.multiplayer.wins + request.resource.data.multiplayer.losses + request.resource.data.multiplayer.draws) == request.resource.data.multiplayer.gamesPlayed
+          && request.resource.data.updatedAt is number;
+        allow delete: if false;
+      }
+
+      // Immutable validated multiplayer game history (cross-checked against completed multiplayer room)
+      match /gameHistory/{resultId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isRegisteredUser()
+          && request.auth.uid == userId
+          && !exists(/databases/$(database)/documents/users/$(userId)/gameHistory/$(resultId))
+          && request.resource.data.resultId == resultId
+          && request.resource.data.playerUid == request.auth.uid
+          && request.resource.data.mode == 'multiplayer'
+          && request.resource.data.validated == true
+          && request.resource.data.gameId in ['memory-match', 'tic-tac-toe', 'snake']
+          && request.resource.data.outcome in ['win', 'loss', 'draw']
+          && request.resource.data.roomCode is string
+          && request.resource.data.completedAt is number
+          && exists(/databases/$(database)/documents/rooms/$(request.resource.data.roomCode))
+          && get(/databases/$(database)/documents/rooms/$(request.resource.data.roomCode)).data.status == 'completed'
+          && get(/databases/$(database)/documents/rooms/$(request.resource.data.roomCode)).data.gameType == request.resource.data.gameId
+          && (request.auth.uid in get(/databases/$(database)/documents/rooms/$(request.resource.data.roomCode)).data.players)
+          && get(/databases/$(database)/documents/rooms/$(request.resource.data.roomCode)).data.playerOrder.size() >= 2
+          && isValidCompletedRoomOutcome(
+            get(/databases/$(database)/documents/rooms/$(request.resource.data.roomCode)).data,
+            request.resource.data.gameId,
+            request.resource.data.outcome
+          );
+        allow update, delete: if false;
+      }
+
+      // Server-authoritative achievements (read-only to owner; clients cannot self-grant badges)
+      match /achievements/{achievementId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow write: if false;
+      }
+
+      // Server-authoritative Arcade XP & Level progression (read-only to owner; clients cannot grant XP)
+      match /progression/{docId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow write: if false;
+      }
+
+      // Private single-player personal bests (strictly private to owner; never used for public leaderboards)
+      match /privateRecords/{docId} {
+        allow read: if isRegisteredUser() && request.auth.uid == userId;
+        allow create, update: if isRegisteredUser()
+          && request.auth.uid == userId
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.updatedAt is number;
+        allow delete: if false;
+      }
+    }
+
+    // Competitive Multiplayer Leaderboards (publicly readable; validated atomic per-match increments only)
+    match /leaderboardEntries/{entryId} {
+      allow read: if true;
+      allow create: if isRegisteredUser()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.isAnonymous == false
+        && request.resource.data.gameId in ['memory-match', 'tic-tac-toe', 'snake']
+        && request.resource.data.period in ['weekly', 'monthly', 'all-time']
+        && request.resource.data.periodKey is string
+        && request.resource.data.entryId == entryId
+        && entryId == (request.resource.data.gameId + '_' + request.resource.data.period + '_' + request.resource.data.periodKey + '_' + request.auth.uid)
+        && request.resource.data.lastResultId is string
+        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)/gameHistory/$(request.resource.data.lastResultId))
+        && request.resource.data.gamesPlayed == 1
+        && request.resource.data.wins in [0, 1]
+        && request.resource.data.losses in [0, 1]
+        && request.resource.data.draws in [0, 1]
+        && (request.resource.data.wins + request.resource.data.losses + request.resource.data.draws) == 1
+        && request.resource.data.updatedAt is number;
+      allow update: if isRegisteredUser()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.entryId == resource.data.entryId
+        && request.resource.data.gameId == resource.data.gameId
+        && request.resource.data.period == resource.data.period
+        && request.resource.data.periodKey == resource.data.periodKey
+        && request.resource.data.isAnonymous == false
+        && request.resource.data.lastResultId is string
+        && request.resource.data.lastResultId != resource.data.lastResultId
+        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)/gameHistory/$(request.resource.data.lastResultId))
+        && request.resource.data.gamesPlayed == resource.data.gamesPlayed + 1
+        && (request.resource.data.wins - resource.data.wins) in [0, 1]
+        && (request.resource.data.losses - resource.data.losses) in [0, 1]
+        && (request.resource.data.draws - resource.data.draws) in [0, 1]
+        && (request.resource.data.wins + request.resource.data.losses + request.resource.data.draws) == request.resource.data.gamesPlayed
+        && request.resource.data.updatedAt is number;
+      allow delete: if false;
+    }
+
+    // Restricted Public Player Profiles (opt-in personal bests & achievement summaries; never exposes email)
+    match /publicProfiles/{userId} {
+      allow read: if true;
+      allow create, update: if isRegisteredUser()
+        && request.auth.uid == userId
+        && request.resource.data.uid == request.auth.uid
+        && !('email' in request.resource.data)
+        && request.resource.data.username is string
+        && request.resource.data.username.size() >= 3
+        && request.resource.data.username.size() <= 20
+        && request.resource.data.sharePersonalBests is bool
+        && request.resource.data.shareAchievementSummary is bool
+        && (request.resource.data.sharePersonalBests == true || request.resource.data.sharedPersonalBests == null)
+        && (request.resource.data.shareAchievementSummary == true || request.resource.data.sharedAchievementSummary == null)
+        && request.resource.data.updatedAt is number;
+      allow delete: if false;
     }
 
     // Atomic username reservations guaranteeing globally unique usernames
@@ -587,6 +801,11 @@ service cloud.firestore {
     function isRegisteredUser() {
       return isSignedIn()
         && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    // Verified administrator helper (exclusively backed by Firebase Auth custom claims)
+    function isAdmin() {
+      return isRegisteredUser() && request.auth.token.admin == true;
     }
 
     // Level 1: Persistent user-owned Arcade Rooms (separate from individual Level 2 game sessions)
@@ -611,11 +830,20 @@ service cloud.firestore {
           && request.resource.data.createdAt == resource.data.createdAt;
       }
 
-      // Members can read any room they belong to; invite-only active rooms can be looked up by invite code
-      allow read: if isSignedIn()
+      // Members can read any room they belong to; invite-only active rooms can be looked up by single invite code
+      allow get: if isSignedIn()
         && (
           isArcadeMember(resource.data)
           || (resource.data.visibility == 'invite-only' && resource.data.status == 'active')
+        );
+      allow list: if isSignedIn()
+        && (
+          isArcadeMember(resource.data)
+          || (
+            resource.data.visibility == 'invite-only'
+            && resource.data.status == 'active'
+            && request.query.limit <= 1
+          )
         );
 
       // Strictly registered (non-anonymous) users can create persistent arcade rooms
@@ -703,6 +931,11 @@ service cloud.firestore {
         return get(/databases/$(database)/documents/arcadeRooms/$(arcadeRoomId));
       }
 
+      // Reads the post-transaction parent room document so atomic room+owner creation succeeds
+      function parentArcadeRoomAfter() {
+        return getAfter(/databases/$(database)/documents/arcadeRooms/$(arcadeRoomId));
+      }
+
       // Persistent Arcade Room Members subcollection
       match /members/{memberUid} {
         allow read: if isSignedIn()
@@ -712,8 +945,15 @@ service cloud.firestore {
           && request.auth.uid == memberUid
           && request.resource.data.uid == request.auth.uid
           && (
-            (request.resource.data.role == 'owner' && parentArcadeRoom().data.ownerUid == request.auth.uid)
-            || request.resource.data.role == 'member'
+            (
+              isRegisteredUser()
+              && request.resource.data.role == 'owner'
+              && parentArcadeRoomAfter().data.ownerUid == request.auth.uid
+            )
+            || (
+              request.resource.data.role == 'member'
+              && (request.auth.uid in parentArcadeRoomAfter().data.memberUids)
+            )
           );
 
         allow update: if isSignedIn()
@@ -755,7 +995,7 @@ service cloud.firestore {
           && request.resource.data.sessionId == sessionId
           && request.resource.data.arcadeRoomId == arcadeRoomId
           && request.resource.data.createdByUid == request.auth.uid
-          && request.resource.data.gameType in ['memory-match', 'tic-tac-toe']
+          && request.resource.data.gameType in ['memory-match', 'tic-tac-toe', 'snake']
           && request.resource.data.status == 'waiting'
           && request.resource.data.createdAt is number;
 
@@ -770,6 +1010,77 @@ service cloud.firestore {
 
         allow delete: if isRegisteredUser()
           && parentArcadeRoom().data.ownerUid == request.auth.uid;
+      }
+    }
+
+    // Feedback, Bug Reports & Improvement Requests
+    match /feedbackReports/{reportId} {
+      // Verified admins can read all reports; registered players can read ONLY their own reports
+      allow read: if isAdmin()
+        || (isRegisteredUser() && resource.data.reporterUid == request.auth.uid);
+
+      // Any signed-in user (registered or anonymous) can submit a valid report;
+      // players cannot forge another user's UID, set admin status/priority, or attach admin responses
+      allow create: if isSignedIn()
+        && request.resource.data.reportId == reportId
+        && request.resource.data.category in [
+          'bug-report',
+          'game-issue',
+          'improvement-suggestion',
+          'feature-request',
+          'general-feedback',
+          'performance-issue'
+        ]
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 5
+        && request.resource.data.title.size() <= 100
+        && request.resource.data.description is string
+        && request.resource.data.description.size() >= 15
+        && request.resource.data.description.size() <= 1500
+        && request.resource.data.status == 'submitted'
+        && request.resource.data.priority == 'medium'
+        && request.resource.data.assignedAdminUid == null
+        && request.resource.data.resolvedAt == null
+        && request.resource.data.latestPublicResponse == null
+        && request.resource.data.createdAt is number
+        && request.resource.data.updatedAt is number
+        && (
+          (isRegisteredUser() && request.resource.data.isAnonymous == false && request.resource.data.reporterUid == request.auth.uid)
+          || (!isRegisteredUser() && request.resource.data.isAnonymous == true && (request.resource.data.reporterUid == null || request.resource.data.reporterUid == request.auth.uid))
+        );
+
+      // Only verified administrators can update report status, priority, or public response
+      allow update: if isAdmin()
+        && request.resource.data.reportId == resource.data.reportId
+        && request.resource.data.reporterUid == resource.data.reporterUid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.status in ['submitted', 'under-review', 'in-progress', 'resolved', 'closed']
+        && request.resource.data.priority in ['low', 'medium', 'high', 'critical']
+        && request.resource.data.updatedAt is number;
+
+      allow delete: if false;
+
+      // Activity history subcollection (strictly isolates internal admin notes from players)
+      match /activity/{activityId} {
+        allow read: if isAdmin()
+          || (
+            isRegisteredUser()
+            && get(/databases/$(database)/documents/feedbackReports/$(reportId)).data.reporterUid == request.auth.uid
+            && resource.data.visibility == 'public'
+          );
+
+        allow create: if isAdmin()
+          || (
+            isSignedIn()
+            && request.resource.data.reportId == reportId
+            && request.resource.data.type == 'submitted'
+            && request.resource.data.visibility == 'public'
+            && request.resource.data.authorUid == request.auth.uid
+            && request.resource.data.createdAt is number
+            && get(/databases/$(database)/documents/feedbackReports/$(reportId)).data.reporterUid == request.auth.uid
+          );
+
+        allow update, delete: if false;
       }
     }
 

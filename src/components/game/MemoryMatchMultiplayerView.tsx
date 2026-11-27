@@ -42,16 +42,19 @@ import {
   MISMATCH_REVEAL_DELAY_MS,
   getMemoryPlayerColor,
   getMatchedCardOwnerColor,
-  startMemoryMatchRematch,
 } from '../../logic/memoryMatchMultiplayer';
 import {
   isPlayerEffectivelyConnected,
   getUserFriendlyMultiplayerError,
+  returnRoomToWaiting,
+  togglePlayerReady,
 } from '../../logic/multiplayerRoom';
 import { MemorySymbolIcon } from './MemorySymbolIcon';
 import { WinCelebration } from '../common/WinCelebration';
 import { VictoryCelebrationModal } from '../common/VictoryCelebrationModal';
 import { useAudio } from '../../context/AudioContext';
+import { useAuth } from '../../context/AuthContext';
+import { recordVerifiedMultiplayerMatchForPlayer } from '../../logic/matchRecording';
 
 interface MemoryMatchMultiplayerViewProps {
   onBackToHome: () => void;
@@ -63,6 +66,8 @@ export const MemoryMatchMultiplayerView: React.FC<
 > = ({ onBackToHome, onActiveGameChange }) => {
   const { playFlip, playMatch, playMismatch, playWin, playDraw, playClick } =
     useAudio();
+  const { profile, isSignedInAccount } = useAuth();
+  const recordedMemoryRoundRef = useRef<string | null>(null);
   const {
     room,
     uid,
@@ -235,10 +240,36 @@ export const MemoryMatchMultiplayerView: React.FC<
       setTimeout(() => {
         setIsCelebrationOpen(true);
       }, 300);
+
+      const roundKey = `${room.roomCode}_r${mm.roundNumber}`;
+      if (uid && isSignedInAccount && profile && recordedMemoryRoundRef.current !== roundKey) {
+        recordedMemoryRoundRef.current = roundKey;
+        const myOutcome = mm.isTie
+          ? 'draw'
+          : mm.winnerUids.includes(uid)
+            ? 'win'
+            : 'loss';
+        void recordVerifiedMultiplayerMatchForPlayer({
+          roomCode: room.roomCode,
+          gameId: 'memory-match',
+          roundNumber: mm.roundNumber,
+          playerUid: uid,
+          profile,
+          isRegisteredAccount: isSignedInAccount,
+          outcome: myOutcome,
+          score: room.players[uid]?.score ?? 0,
+          opponentUids: room.playerOrder.filter((id) => id !== uid),
+          metrics: {
+            pairsMatched: room.players[uid]?.score ?? 0,
+            totalPairs: mm.totalPairs,
+            cardCount: mm.cards.length,
+          },
+        });
+      }
     } else if (room.status === 'in_progress') {
       prevStatusRef.current = 'in_progress';
     }
-  }, [room, playMatch, playWin, playDraw]);
+  }, [room, uid, profile, isSignedInAccount, playMatch, playWin, playDraw]);
 
   const handleStartGame = async () => {
     if (!room) return;
@@ -318,12 +349,23 @@ export const MemoryMatchMultiplayerView: React.FC<
     try {
       prevMatchedPairsRef.current = 0;
       setIsCelebrationOpen(false);
-      const nextRoundRoom = await startMemoryMatchRematch(room.roomCode);
-      syncRoom?.(nextRoundRoom);
+      const waitingRoom = await returnRoomToWaiting(room.roomCode);
+      syncRoom?.(waitingRoom);
     } catch (err) {
       setActionError(getUserFriendlyMultiplayerError(err, 'rematch'));
     } finally {
       setIsSubmittingRematch(false);
+    }
+  };
+
+  const handleToggleReady = async (nextReady: boolean) => {
+    if (!room) return;
+    setActionError(null);
+    try {
+      const updated = await togglePlayerReady(room.roomCode, nextReady);
+      syncRoom?.(updated);
+    } catch (err) {
+      setActionError(getUserFriendlyMultiplayerError(err, 'game-action'));
     }
   };
 
@@ -406,6 +448,7 @@ export const MemoryMatchMultiplayerView: React.FC<
         onCreateRoom={createRoom}
         onJoinRoom={joinRoom}
         onUpdateRoomSettings={updateRoomSettings}
+        onToggleReady={handleToggleReady}
         onStartGame={handleStartGame}
         onLeaveRoom={leaveRoom}
         onCloseRoom={closeRoom}
@@ -426,13 +469,6 @@ export const MemoryMatchMultiplayerView: React.FC<
     minPlayers: roomSettings.minPlayers,
     maxPlayers: roomSettings.maxPlayers,
   };
-  const canStartRematchWithSettings =
-    isHost &&
-    isGameOver &&
-    !isSubmittingRematch &&
-    !isSavingSettings &&
-    room.playerOrder.length >= roomSettings.minPlayers &&
-    room.playerOrder.length <= roomSettings.maxPlayers;
 
   const myPlayer = uid ? room.players[uid] : null;
   const myConnected = myPlayer
@@ -725,44 +761,6 @@ export const MemoryMatchMultiplayerView: React.FC<
         })}
       </div>
 
-      {/* Compact Player Colour Legend */}
-      <div
-        className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 sm:gap-x-3 sm:gap-y-1.5 max-w-4xl mx-auto mb-1.5 sm:mb-3 px-2 py-1 sm:px-3 sm:py-1.5 rounded-lg bg-[#201A36]/80 border border-[#3D345F]/70 text-[10px] sm:text-[11px]"
-        data-testid="mp-memory-color-legend"
-        aria-label="Matched card player colour legend"
-      >
-        <span className="text-[#FFF0D7]/60 font-semibold uppercase tracking-wider text-[9px] sm:text-[10px]">
-          <span className="sm:hidden">Colours:</span>
-          <span className="hidden sm:inline">Matched Card Colours:</span>
-        </span>
-        {orderedPlayers.map((player, idx) => {
-          const playerColor = getMemoryPlayerColor(player.uid, mm.turnOrderUids);
-          const hex = playerColor?.hex ?? '#3B82F6';
-          const tint = playerColor?.tintRgba ?? 'rgba(59, 130, 246, 0.16)';
-          return (
-            <span
-              key={player.uid}
-              className="inline-flex items-center gap-1 sm:gap-1.5 text-[#FFF0D7]/90 font-medium"
-              data-testid={`mp-memory-legend-item-${idx}`}
-            >
-              <span
-                className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-sm border-2 inline-block shrink-0"
-                style={{
-                  borderColor: hex,
-                  backgroundColor: tint,
-                  boxShadow: `0 0 6px ${playerColor?.glowRgba ?? 'transparent'}`,
-                }}
-                aria-hidden="true"
-              />
-              <span className="font-bold" style={{ color: hex }}>
-                {playerColor?.label ?? `P${idx + 1}`}
-              </span>
-              <span className="hidden sm:inline truncate max-w-[95px]">{player.nickname}</span>
-            </span>
-          );
-        })}
-      </div>
-
       {/* New Round Transition Banner */}
       {roundTransitionText && (
         <div
@@ -906,10 +904,8 @@ export const MemoryMatchMultiplayerView: React.FC<
               </h3>
               <p className="text-xs text-[#FFF0D7]/75" data-testid="mp-memory-rematch-status">
                 {isHost
-                  ? room.playerOrder.length < roomSettings.minPlayers
-                    ? `Need at least ${roomSettings.minPlayers} players for Round ${(mm.roundNumber ?? 1) + 1} (currently ${room.playerOrder.length}). Lower minimum players or wait.`
-                    : `Click Play Again to deal ${roomSettings.cardCount} cards (${getMemoryPairCount(roomSettings.cardCount)} pairs) for Round ${(mm.roundNumber ?? 1) + 1}!`
-                  : `Waiting for the host to start Round ${(mm.roundNumber ?? 1) + 1} (${roomSettings.cardCount} cards · ${getMemoryPairCount(roomSettings.cardCount)} pairs)...`}
+                  ? `Return everyone to the waiting room to ready up and let new players join before Round ${(mm.roundNumber ?? 1) + 1} (${roomSettings.cardCount} cards · ${getMemoryPairCount(roomSettings.cardCount)} pairs).`
+                  : `Waiting for the host to return the room to the waiting area for Round ${(mm.roundNumber ?? 1) + 1}...`}
               </p>
             </div>
 
@@ -918,11 +914,11 @@ export const MemoryMatchMultiplayerView: React.FC<
                 <button
                   type="button"
                   onClick={() => void handleStartNextRound()}
-                  disabled={!canStartRematchWithSettings}
+                  disabled={isSubmittingRematch || isSavingSettings}
                   className="w-full sm:w-auto px-4 sm:px-5 py-2.5 sm:py-3 rounded-xl font-['Press_Start_2P'] text-[10px] sm:text-xs uppercase tracking-wider bg-[#FF776E] hover:bg-[#ff8d85] text-[#171329] shadow-[0_0_20px_rgba(255,119,110,0.4)] transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                   data-testid="mp-memory-play-again-btn"
                 >
-                  Play Again
+                  Return to Waiting Room
                 </button>
               </div>
             )}

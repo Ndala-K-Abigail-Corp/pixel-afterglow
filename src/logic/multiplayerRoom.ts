@@ -6,6 +6,7 @@
 import {
   MultiplayerGameType,
   MultiplayerRoomDocument,
+  CompletedRoundSummary,
   RoomPlayer,
   RoomStatus,
   MemoryMultiplayerPlayerCount,
@@ -164,6 +165,9 @@ export function buildInitialRoomDocument(params: {
     const validatedSettings = validateMemoryRoomSettingsInput(candidateSettings);
     memoryRoomSettings = validatedSettings;
     maxPlayers = validatedSettings.maxPlayers;
+  } else if (params.gameType === 'snake') {
+    maxPlayers = Math.min(10, Math.max(2, Math.floor(params.maxPlayers ?? 10)));
+    memoryRoomSettings = null;
   }
 
   const hostPlayer: RoomPlayer = {
@@ -1617,4 +1621,173 @@ export async function validateRoomInvitation(params: {
       room: null,
     };
   }
+}
+
+/**
+ * Pure reducer for Phase 4 Universal Multiplayer Round Lifecycle:
+ * Transitions a `completed` room back to `waiting` so all connected players remain
+ * in the same room, new players can join via the same room code/link, completed
+ * round results are preserved in `lastCompletedRound`, and active board state is cleared.
+ */
+export function applyReturnRoomToWaiting(
+  room: MultiplayerRoomDocument,
+  actorUid: string,
+  summary?: Partial<CompletedRoundSummary>,
+  nowMs: number = Date.now()
+): MultiplayerRoomDocument {
+  if (room.hostUid !== actorUid) {
+    throw new MultiplayerRoomError(
+      'NOT_HOST',
+      'Only the room host can return the room to the waiting area.'
+    );
+  }
+  if (room.status !== 'completed') {
+    throw new MultiplayerRoomError(
+      'INVALID_STATE_TRANSITION',
+      'Only a completed round can return to the waiting room.'
+    );
+  }
+
+  const prevRoundNumber =
+    room.roundNumber ??
+    room.memoryMatchState?.roundNumber ??
+    room.ticTacToeState?.roundNumber ??
+    1;
+
+  // Derive a preserved round summary if one was not explicitly passed
+  let winnerNames: string[] = summary?.winnerNames ?? [];
+  let isDraw = summary?.isDraw ?? false;
+  if (winnerNames.length === 0 && room.memoryMatchState) {
+    isDraw = room.memoryMatchState.isTie;
+    winnerNames = room.memoryMatchState.winnerUids
+      .map((u) => room.players[u]?.nickname || 'Player');
+  } else if (winnerNames.length === 0 && room.ticTacToeState) {
+    isDraw = room.ticTacToeState.isDraw;
+    if (room.ticTacToeState.winnerUid) {
+      winnerNames = [room.players[room.ticTacToeState.winnerUid]?.nickname || 'Player'];
+    }
+  }
+
+  const summaryText =
+    summary?.summaryText ??
+    (isDraw
+      ? `Round ${prevRoundNumber} ended in a draw.`
+      : winnerNames.length > 0
+        ? `Round ${prevRoundNumber} winner: ${winnerNames.join(' & ')}.`
+        : `Round ${prevRoundNumber} completed.`);
+
+  const lastCompletedRound: CompletedRoundSummary = {
+    roundNumber: prevRoundNumber,
+    winnerNames,
+    isDraw,
+    completedAt: room.completedAt ?? nowMs,
+    summaryText,
+  };
+
+  // Preserve room membership, identities, and assigned symbols/order; reset round scores & ready state
+  const resetPlayers: Record<string, RoomPlayer> = {};
+  for (const [pUid, player] of Object.entries(room.players)) {
+    resetPlayers[pUid] = {
+      ...player,
+      score: 0,
+      rematchAccepted: false,
+      isReady: player.isHost, // Host is ready by default; guests explicitly ready up
+      lastSeenAt: pUid === actorUid ? nowMs : player.lastSeenAt,
+    };
+  }
+
+  return {
+    ...room,
+    status: 'waiting',
+    roundNumber: prevRoundNumber + 1,
+    lastCompletedRound,
+    players: resetPlayers,
+    currentTurnUid: null,
+    ticTacToeState: null,
+    memoryMatchState: null,
+    startedAt: null,
+    completedAt: null,
+    lastActivityAt: nowMs,
+    expiresAt: computeRoomExpiresAt('waiting', nowMs),
+  };
+}
+
+/**
+ * Atomically transitions a completed multiplayer room back to the `waiting` room.
+ */
+export async function returnRoomToWaiting(
+  roomCode: string,
+  summary?: Partial<CompletedRoundSummary>
+): Promise<MultiplayerRoomDocument> {
+  const normalizedCode = normalizeRoomCode(roomCode);
+  const user = await ensureAnonymousSession();
+  const roomRef = getDocRef<MultiplayerRoomDocument>(ROOMS_COLLECTION, normalizedCode);
+
+  return runFirestoreTransaction(async (tx) => {
+    const snap = await tx.get(roomRef);
+    if (!snap.exists()) {
+      throw new MultiplayerRoomError('ROOM_NOT_FOUND', MULTIPLAYER_USER_MESSAGES.ROOM_NOT_FOUND);
+    }
+    const current = parseFirestoreRoomDocument(snap.data());
+    const next = applyReturnRoomToWaiting(current, user.uid, summary, Date.now());
+    tx.set(roomRef, next);
+    return next;
+  });
+}
+
+/**
+ * Pure reducer allowing a connected waiting-room player to toggle their ready status.
+ */
+export function applyTogglePlayerReady(
+  room: MultiplayerRoomDocument,
+  uid: string,
+  isReady: boolean,
+  nowMs: number = Date.now()
+): MultiplayerRoomDocument {
+  if (room.status !== 'waiting') {
+    throw new MultiplayerRoomError(
+      'INVALID_STATE_TRANSITION',
+      'Ready status can only be changed while in the waiting room.'
+    );
+  }
+  const player = room.players[uid];
+  if (!player) {
+    throw new MultiplayerRoomError('PERMISSION_DENIED', 'You are not a member of this room.');
+  }
+
+  return {
+    ...room,
+    players: {
+      ...room.players,
+      [uid]: {
+        ...player,
+        isReady,
+        lastSeenAt: nowMs,
+      },
+    },
+    lastActivityAt: nowMs,
+  };
+}
+
+/**
+ * Atomically toggles the calling player's ready state inside a waiting room.
+ */
+export async function togglePlayerReady(
+  roomCode: string,
+  isReady: boolean
+): Promise<MultiplayerRoomDocument> {
+  const normalizedCode = normalizeRoomCode(roomCode);
+  const user = await ensureAnonymousSession();
+  const roomRef = getDocRef<MultiplayerRoomDocument>(ROOMS_COLLECTION, normalizedCode);
+
+  return runFirestoreTransaction(async (tx) => {
+    const snap = await tx.get(roomRef);
+    if (!snap.exists()) {
+      throw new MultiplayerRoomError('ROOM_NOT_FOUND', MULTIPLAYER_USER_MESSAGES.ROOM_NOT_FOUND);
+    }
+    const current = parseFirestoreRoomDocument(snap.data());
+    const next = applyTogglePlayerReady(current, user.uid, isReady, Date.now());
+    tx.set(roomRef, next);
+    return next;
+  });
 }

@@ -6,6 +6,7 @@
 import { initializeApp, getApps, getApp, type FirebaseApp, type FirebaseOptions } from 'firebase/app';
 import { getAuth, type Auth } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import { initializeAppCheck, ReCaptchaV3Provider, type AppCheck } from 'firebase/app-check';
 
 export interface FirebaseEnvConfig {
   VITE_FIREBASE_API_KEY?: string;
@@ -14,6 +15,8 @@ export interface FirebaseEnvConfig {
   VITE_FIREBASE_STORAGE_BUCKET?: string;
   VITE_FIREBASE_MESSAGING_SENDER_ID?: string;
   VITE_FIREBASE_APP_ID?: string;
+  /** Optional reCAPTCHA v3 site key for Firebase App Check (inactive unless configured). */
+  VITE_FIREBASE_APPCHECK_SITE_KEY?: string;
 }
 
 export const REQUIRED_FIREBASE_ENV_KEYS: ReadonlyArray<keyof FirebaseEnvConfig> = [
@@ -51,6 +54,7 @@ function readEnvSource(customEnv?: FirebaseEnvConfig): FirebaseEnvConfig {
     VITE_FIREBASE_STORAGE_BUCKET: metaEnv.VITE_FIREBASE_STORAGE_BUCKET,
     VITE_FIREBASE_MESSAGING_SENDER_ID: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID,
     VITE_FIREBASE_APP_ID: metaEnv.VITE_FIREBASE_APP_ID,
+    VITE_FIREBASE_APPCHECK_SITE_KEY: metaEnv.VITE_FIREBASE_APPCHECK_SITE_KEY,
   };
 }
 
@@ -92,6 +96,33 @@ export const firebaseConfig: FirebaseOptions = buildFirebaseOptions();
 let cachedApp: FirebaseApp | null = null;
 let cachedAuth: Auth | null = null;
 let cachedDb: Firestore | null = null;
+let cachedAppCheck: AppCheck | null = null;
+
+/**
+ * Optionally initializes Firebase App Check when `VITE_FIREBASE_APPCHECK_SITE_KEY` is configured.
+ * Safe no-op when unconfigured or running in non-browser/test environments so existing flows are never disrupted.
+ */
+export function initOptionalAppCheck(
+  app: FirebaseApp,
+  customEnv?: FirebaseEnvConfig
+): AppCheck | null {
+  if (cachedAppCheck || typeof window === 'undefined') {
+    return cachedAppCheck;
+  }
+  const siteKey = readEnvSource(customEnv).VITE_FIREBASE_APPCHECK_SITE_KEY?.trim();
+  if (!siteKey) {
+    return null;
+  }
+  try {
+    cachedAppCheck = initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(siteKey),
+      isTokenAutoRefreshEnabled: true,
+    });
+    return cachedAppCheck;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Returns the singleton FirebaseApp instance, initializing it on first access.
@@ -104,6 +135,7 @@ export function getFirebaseApp(customEnv?: FirebaseEnvConfig): FirebaseApp {
 
   if (getApps().length > 0) {
     cachedApp = getApp();
+    initOptionalAppCheck(cachedApp, customEnv);
     return cachedApp;
   }
 
@@ -113,6 +145,7 @@ export function getFirebaseApp(customEnv?: FirebaseEnvConfig): FirebaseApp {
   }
 
   cachedApp = initializeApp(buildFirebaseOptions(customEnv));
+  initOptionalAppCheck(cachedApp, customEnv);
   return cachedApp;
 }
 
@@ -169,4 +202,5 @@ export function resetFirebaseSingletonsForTesting(): void {
   cachedApp = null;
   cachedAuth = null;
   cachedDb = null;
+  cachedAppCheck = null;
 }

@@ -6,10 +6,13 @@
 import { z } from 'zod';
 import {
   collection,
+  deleteDoc,
   doc,
   getDocs,
+  limit,
   onSnapshot,
   query,
+  setDoc,
   where,
   writeBatch,
   type Unsubscribe,
@@ -94,7 +97,7 @@ export const UpdateArcadeRoomSettingsSchema = z.object({
 
 export const StartArcadeSessionInputSchema = z.object({
   arcadeRoomId: z.string().min(3),
-  gameType: z.enum(['memory-match', 'tic-tac-toe']),
+  gameType: z.enum(['memory-match', 'tic-tac-toe', 'snake']),
   cardCount: ArcadeMemoryCardCountSchema.optional(),
   hostNickname: z.string().trim().min(2).max(20),
 });
@@ -201,8 +204,8 @@ export function buildPersistentArcadeRoom(params: {
     uid: params.ownerUid,
     username: params.ownerUsername,
     role: 'owner',
-    countryCode: params.countryCode,
-    avatarId: params.avatarId,
+    ...(params.countryCode ? { countryCode: params.countryCode } : {}),
+    ...(params.avatarId ? { avatarId: params.avatarId } : {}),
     joinedAt: nowMs,
     lastVisitedAt: nowMs,
   };
@@ -241,12 +244,33 @@ export async function createPersistentArcadeRoom(params: {
     avatarId: params.avatarId,
   });
 
-  await runFirestoreTransaction(async (tx) => {
-    const roomRef = doc(db, ARCADE_ROOMS_COLLECTION, roomId);
-    const memberRef = doc(db, ARCADE_ROOMS_COLLECTION, roomId, ARCADE_MEMBERS_SUBCOLLECTION, uid);
-    tx.set(roomRef, room);
-    tx.set(memberRef, ownerMember);
-  });
+  const roomRef = doc(db, ARCADE_ROOMS_COLLECTION, roomId);
+  const memberRef = doc(db, ARCADE_ROOMS_COLLECTION, roomId, ARCADE_MEMBERS_SUBCOLLECTION, uid);
+
+  try {
+    // Commit parent room document first so both `get()` and `getAfter()` Firestore rules
+    // immediately verify ownership when creating the owner member document.
+    await setDoc(roomRef, room);
+    try {
+      await setDoc(memberRef, ownerMember);
+    } catch (memberErr) {
+      // Roll back parent room so we never leave a partially created room
+      await deleteDoc(roomRef).catch(() => {});
+      throw memberErr;
+    }
+  } catch (err) {
+    const code =
+      err && typeof err === 'object' && 'code' in err
+        ? String((err as { code?: unknown }).code ?? '')
+        : '';
+    if (code === 'permission-denied') {
+      throw new Error(
+        'Unable to create your Arcade Room due to missing permissions. Please ensure you are signed in with a registered account and try again.',
+        { cause: err }
+      );
+    }
+    throw err;
+  }
 
   return room;
 }
@@ -388,7 +412,8 @@ export async function joinPersistentArcadeRoomByCode(params: {
   const db = getFirestoreDb();
   const q = query(
     collection(db, ARCADE_ROOMS_COLLECTION),
-    where('inviteCode', '==', normalized)
+    where('inviteCode', '==', normalized),
+    limit(1)
   );
   const snap = await getDocs(q);
   if (snap.empty) {

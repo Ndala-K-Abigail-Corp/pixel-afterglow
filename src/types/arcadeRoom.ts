@@ -47,10 +47,10 @@ export const ARCADE_GAME_CATALOG: readonly ArcadeGameCatalogEntry[] = [
   {
     id: 'snake',
     title: 'Snake',
-    description: 'Multiplayer neon arena Snake (coming soon).',
+    description: 'Real-time 2–10 player neon Snake arena where larger snakes eat smaller ones.',
     minPlayers: 2,
-    maxPlayers: 4,
-    playable: false,
+    maxPlayers: 10,
+    playable: true,
     accentHex: '#FFC66D',
   },
 ] as const;
@@ -58,6 +58,7 @@ export const ARCADE_GAME_CATALOG: readonly ArcadeGameCatalogEntry[] = [
 export const PLAYABLE_ARCADE_GAMES: readonly MultiplayerGameType[] = [
   'memory-match',
   'tic-tac-toe',
+  'snake',
 ] as const;
 
 /**

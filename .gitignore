@@ -12,6 +12,13 @@ coverage/
 # Environment variables and secrets
 .env*
 !.env.example
+*serviceAccount*.json
+*service-account*.json
+*firebase-adminsdk*.json
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Logs
 *.log

@@ -61,7 +61,7 @@ export const PlayerScoreSchema = z.number().int().min(0).max(500);
 /**
  * 5. Room Capacity & Game Type Schemas:
  */
-export const MultiplayerGameTypeSchema = z.enum(['tic-tac-toe', 'memory-match']);
+export const MultiplayerGameTypeSchema = z.enum(['tic-tac-toe', 'memory-match', 'snake']);
 
 export const RoomStatusSchema = z.enum([
   'waiting',
@@ -83,7 +83,7 @@ export const MemoryPlayerCapacitySchema = z.union([
   z.literal(8),
 ]);
 
-export const RoomCapacitySchema = z.number().int().min(2).max(8);
+export const RoomCapacitySchema = z.number().int().min(2).max(10);
 
 /**
  * 6. Memory Match Room Settings Schema (board size independent of player count):
@@ -141,6 +141,15 @@ export const RoomCreationRequestSchema = z
         memorySettings: null as MemoryRoomSettings | null,
       };
     }
+    if (val.gameType === 'snake') {
+      const maxPlayers = Math.min(10, Math.max(2, val.maxPlayers ?? 10));
+      return {
+        gameType: val.gameType,
+        hostNickname: val.hostNickname,
+        maxPlayers,
+        memorySettings: null as MemoryRoomSettings | null,
+      };
+    }
     const maxPlayers =
       val.memorySettings?.maxPlayers ?? val.maxPlayers ?? DEFAULT_MEMORY_ROOM_SETTINGS.maxPlayers;
     const memorySettings = {
@@ -158,12 +167,13 @@ export const RoomCreationRequestSchema = z
     };
   })
   .refine(
-    (val) =>
-      val.gameType === 'tic-tac-toe'
-        ? val.maxPlayers === 2
-        : MemoryRoomSettingsSchema.safeParse(val.memorySettings).success,
+    (val) => {
+      if (val.gameType === 'tic-tac-toe') return val.maxPlayers === 2;
+      if (val.gameType === 'snake') return val.maxPlayers >= 2 && val.maxPlayers <= 10;
+      return MemoryRoomSettingsSchema.safeParse(val.memorySettings).success;
+    },
     {
-      message: 'Invalid room settings for the selected game.',
+      message: 'Please choose valid room settings for the selected game.',
       path: ['memorySettings'],
     }
   );
@@ -192,7 +202,7 @@ export const RoomPlayerSchema = z.object({
 export const RoomMembershipSchema = z
   .object({
     players: z.record(z.string(), RoomPlayerSchema),
-    playerOrder: z.array(PlayerIdentitySchema).min(0).max(8),
+    playerOrder: z.array(PlayerIdentitySchema).min(0).max(10),
     maxPlayers: RoomCapacitySchema,
   })
   .refine(

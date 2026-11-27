@@ -29,10 +29,10 @@ export const GAMES_CATALOG: GameMetadata[] = [
   {
     id: 'snake',
     title: 'Snake',
-    tagline: 'Greedy retro reptile eating pixel apples',
-    description: 'Slither across the vintage phosphor grid, gobble energised power-pixels, and dodge your own tail as your speed increases.',
-    status: 'coming-soon',
-    badge: 'Coming Soon',
+    tagline: 'Neon arcade arena — Solo (3 Speeds × 3 Difficulties) & 2–10P Online',
+    description: 'Slither across the vintage phosphor grid with independent Speed & Difficulty modes in solo play, or battle 2–10 players online where larger snakes eat smaller ones.',
+    status: 'playable',
+    badge: 'Play Now',
     accentColor: '#FFC66D', // Golden Continue
     category: 'Arcade Classic',
   },

@@ -280,24 +280,24 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
         </div>
       )}
 
-      {/* Compact Floating Corner Chat Button */}
+      {/* Floating Corner Chat Launcher (Accessible Tap Target & Clear Label) */}
       <button
         type="button"
         onClick={handleToggleChat}
         aria-expanded={isChatOpen}
         aria-label={isChatOpen ? 'Close room chat' : 'Open room chat'}
         data-testid="room-chat-toggle"
-        className={`fixed bottom-3 right-3 sm:bottom-4 sm:right-4 z-40 inline-flex items-center gap-1.5 px-3 py-2.5 rounded-full border-2 text-xs font-bold shadow-[0_6px_24px_rgba(14,10,30,0.75)] transition-all cursor-pointer ${
+        className={`fixed bottom-4 right-4 sm:bottom-5 sm:right-5 z-40 inline-flex items-center gap-2 px-4 py-3 min-h-[46px] rounded-full border-2 text-xs sm:text-sm font-bold shadow-[0_8px_28px_rgba(14,10,30,0.82)] transition-all cursor-pointer touch-manipulation ${
           isChatOpen
             ? 'bg-[#56E0CB] text-[#171329] border-[#56E0CB]'
-            : 'bg-[#201A36] hover:bg-[#292342] text-[#56E0CB] border-[#56E0CB]/70'
+            : 'bg-[#201A36] hover:bg-[#292342] text-[#56E0CB] border-[#56E0CB]/80'
         }`}
       >
-        <MessageSquare className="w-4 h-4 shrink-0" />
-        <span className="hidden sm:inline">Chat</span>
+        <MessageSquare className="w-5 h-5 shrink-0" />
+        <span>Chat</span>
         {unreadCount > 0 && (
           <span
-            className="px-1.5 py-0.5 rounded-full bg-[#FF776E] text-[#171329] text-[10px] font-extrabold leading-none"
+            className="px-2 py-0.5 rounded-full bg-[#FF776E] text-[#171329] text-xs font-extrabold leading-none"
             data-testid="room-chat-unread-badge"
           >
             {unreadCount > 99 ? '99+' : unreadCount}
@@ -305,11 +305,11 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
         )}
       </button>
 
-      {/* Compact Floating Chat Panel (Desktop) / Compact Bottom Sheet (Mobile) */}
+      {/* Floating Chat Panel (Desktop) / Bottom Drawer (Mobile) */}
       {isChatOpen && (
         <>
           <div
-            className="sm:hidden fixed inset-0 bg-black/50 z-40"
+            className="sm:hidden fixed inset-0 bg-black/55 z-40"
             onClick={handleToggleChat}
             aria-hidden="true"
           />
@@ -317,14 +317,14 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
           <section
             aria-label="Room Chat"
             data-testid="room-chat-panel"
-            className="fixed inset-x-0 bottom-0 z-50 sm:inset-x-auto sm:bottom-16 sm:right-4 sm:w-[320px] sm:h-[380px] sm:max-h-[58vh] bg-[#171329] border-t-2 sm:border-2 border-[#56E0CB]/70 rounded-t-2xl sm:rounded-2xl shadow-[0_12px_36px_rgba(10,6,24,0.88)] flex flex-col max-h-[54dvh]"
+            className="fixed inset-x-0 bottom-0 z-50 sm:inset-x-auto sm:bottom-20 sm:right-5 sm:w-[376px] sm:h-[450px] sm:max-h-[66vh] bg-[#171329] border-t-2 sm:border-2 border-[#56E0CB]/80 rounded-t-2xl sm:rounded-2xl shadow-[0_14px_42px_rgba(10,6,24,0.92)] flex flex-col max-h-[68dvh] overflow-x-hidden"
           >
             {/* Chat Header */}
-            <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-[#3D345F] bg-[#201A36] rounded-t-2xl shrink-0">
+            <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-[#3D345F] bg-[#201A36] rounded-t-2xl shrink-0">
               <div className="flex items-center gap-2 min-w-0">
-                <MessageSquare className="w-3.5 h-3.5 text-[#56E0CB] shrink-0" />
-                <span className="font-['Press_Start_2P'] text-[9px] text-[#56E0CB] uppercase tracking-wider truncate">
-                  Chat · {room.roomCode}
+                <MessageSquare className="w-4 h-4 text-[#56E0CB] shrink-0" />
+                <span className="font-['Press_Start_2P'] text-[10px] text-[#56E0CB] uppercase tracking-wider truncate">
+                  Room Chat · {room.roomCode}
                 </span>
               </div>
               <button
@@ -332,7 +332,7 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
                 onClick={handleToggleChat}
                 aria-label="Close room chat"
                 data-testid="room-chat-close"
-                className="p-1 rounded-lg hover:bg-[#292342] text-[#FFF0D7]/75 hover:text-[#FFF0D7] cursor-pointer shrink-0"
+                className="p-1.5 rounded-lg hover:bg-[#292342] text-[#FFF0D7]/80 hover:text-[#FFF0D7] cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -342,30 +342,30 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
             {socialError && (
               <div
                 role="alert"
-                className="mx-2.5 mt-2 px-2.5 py-1.5 rounded-lg bg-[#FF776E]/15 border border-[#FF776E]/60 text-[#FFF0D7] text-[11px] flex items-center gap-1.5 shrink-0"
+                className="mx-3 mt-2.5 px-3 py-2 rounded-lg bg-[#FF776E]/15 border border-[#FF776E]/60 text-[#FFF0D7] text-xs flex items-center gap-2 shrink-0"
                 data-testid="room-chat-error"
               >
-                <AlertTriangle className="w-3.5 h-3.5 text-[#FF776E] shrink-0" />
+                <AlertTriangle className="w-4 h-4 text-[#FF776E] shrink-0" />
                 <span>{socialError}</span>
               </div>
             )}
 
-            {/* Scrollable Compact Message Bubbles */}
+            {/* Scrollable Message Bubbles */}
             <div
-              className="flex-1 overflow-y-auto arcade-scrollbar px-2.5 py-2.5 space-y-2 min-h-[120px]"
+              className="flex-1 overflow-y-auto arcade-scrollbar px-3.5 py-3.5 space-y-3 min-h-[160px]"
               data-testid="room-chat-messages"
             >
               {isLoadingChat ? (
-                <div className="flex items-center justify-center gap-2 py-6 text-xs text-[#FFF0D7]/60">
+                <div className="flex items-center justify-center gap-2 py-8 text-sm text-[#FFF0D7]/70">
                   <Loader2 className="w-4 h-4 animate-spin text-[#56E0CB]" />
                   <span>Loading chat...</span>
                 </div>
               ) : messages.length === 0 ? (
                 <p
-                  className="text-center py-6 text-xs text-[#FFF0D7]/55 italic"
+                  className="text-center py-8 text-sm text-[#FFF0D7]/60 italic"
                   data-testid="room-chat-empty"
                 >
-                  No messages yet — say hi!
+                  No messages yet — say hi to the room!
                 </p>
               ) : (
                 messages.map((msg) => {
@@ -380,28 +380,28 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
                       data-testid={`room-chat-message-${msg.id}`}
                     >
                       <div
-                        className={`max-w-[86%] rounded-xl px-2.5 py-1.5 border text-xs shadow-sm ${
+                        className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 border shadow-sm ${
                           isMine
-                            ? 'bg-[#56E0CB]/15 border-[#56E0CB]/55 rounded-br-sm'
-                            : 'bg-[#201A36] border-[#3D345F] rounded-bl-sm'
+                            ? 'bg-[#56E0CB]/18 border-[#56E0CB]/65 rounded-br-sm'
+                            : 'bg-[#241D3D] border-[#3D345F] rounded-bl-sm'
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-2 mb-0.5">
-                          <div className="flex items-center gap-1 min-w-0">
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
                             <span
-                              className="font-bold text-[10px] truncate"
+                              className="font-bold text-xs truncate"
                               style={{ color: isMine ? '#56E0CB' : senderColor }}
                             >
                               {msg.nickname}
                             </span>
                             {isMine && (
-                              <span className="px-1 py-0.2 rounded bg-[#56E0CB]/25 text-[#56E0CB] text-[8px] font-bold">
+                              <span className="px-1.5 py-0.5 rounded bg-[#56E0CB]/25 text-[#56E0CB] text-[10px] font-bold leading-none">
                                 YOU
                               </span>
                             )}
                           </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <span className="text-[9px] text-[#FFF0D7]/45">
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="text-[11px] text-[#FFF0D7]/65 font-mono">
                               {formatMessageTime(msg.createdAt)}
                             </span>
                             {canDelete && (
@@ -410,14 +410,14 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
                                 onClick={() => void deleteMessage(msg.id)}
                                 aria-label={`Delete message from ${msg.nickname}`}
                                 data-testid={`delete-chat-message-${msg.id}`}
-                                className="p-0.5 rounded text-[#FFF0D7]/40 hover:text-[#FF776E] cursor-pointer"
+                                className="p-1 rounded text-[#FFF0D7]/55 hover:text-[#FF776E] cursor-pointer"
                               >
-                                <Trash2 className="w-3 h-3" />
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             )}
                           </div>
                         </div>
-                        <p className="text-[#FFF0D7] break-words leading-snug text-[11px]">
+                        <p className="text-[#FFF0D7] break-words whitespace-pre-wrap leading-relaxed text-sm font-medium">
                           {msg.text}
                         </p>
                       </div>
@@ -428,10 +428,10 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Compact Composer */}
+            {/* Accessible Composer */}
             <form
               onSubmit={(e) => void handleSubmitMessage(e)}
-              className="p-2 border-t border-[#3D345F] bg-[#201A36] sm:rounded-b-2xl flex items-center gap-1.5 shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+              className="p-3 border-t border-[#3D345F] bg-[#201A36] sm:rounded-b-2xl flex items-center gap-2 shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
             >
               <input
                 ref={inputRef}
@@ -439,12 +439,12 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
                 value={draft}
                 maxLength={CHAT_MESSAGE_MAX_LENGTH}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="Message room..."
+                placeholder="Type a message..."
                 aria-label="Room chat message"
                 data-testid="room-chat-input"
-                className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[#171329] border border-[#3D345F] focus:border-[#56E0CB] text-[#FFF0D7] text-xs outline-none"
+                className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-[#171329] border border-[#3D345F] focus:border-[#56E0CB] text-[#FFF0D7] text-sm outline-none"
               />
-              <span className="text-[9px] text-[#FFF0D7]/45 shrink-0">
+              <span className="text-[11px] font-mono text-[#FFF0D7]/55 shrink-0">
                 {draft.length}/{CHAT_MESSAGE_MAX_LENGTH}
               </span>
               <button
@@ -452,12 +452,12 @@ export const RoomSocialBar: React.FC<RoomSocialBarProps> = ({
                 disabled={isSendingMessage || !draft.trim()}
                 aria-label="Send chat message"
                 data-testid="room-chat-send"
-                className="inline-flex items-center justify-center px-2.5 py-1.5 rounded-lg bg-[#56E0CB] hover:bg-[#6eead8] text-[#171329] text-xs font-bold cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed shrink-0"
+                className="inline-flex items-center justify-center px-3.5 py-2 min-h-[38px] rounded-xl bg-[#56E0CB] hover:bg-[#6eead8] text-[#171329] text-sm font-bold cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed shrink-0"
               >
                 {isSendingMessage ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
-                  <Send className="w-3.5 h-3.5" />
+                  <Send className="w-4 h-4" />
                 )}
               </button>
             </form>

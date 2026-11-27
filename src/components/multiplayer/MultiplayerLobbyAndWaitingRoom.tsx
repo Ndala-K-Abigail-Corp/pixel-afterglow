@@ -50,6 +50,9 @@ import type {
   InvitationValidationState,
 } from '../../hooks/useMultiplayerRoom';
 import { useAudio } from '../../context/AudioContext';
+import { useAuth } from '../../context/AuthContext';
+import { subscribeToUserArcadeRooms } from '../../logic/arcadeRooms';
+import type { PersistentArcadeRoom } from '../../types/arcadeRoom';
 
 export interface MultiplayerLobbyAndWaitingRoomProps {
   gameType: MultiplayerGameType;
@@ -81,6 +84,7 @@ export interface MultiplayerLobbyAndWaitingRoomProps {
   onUpdateRoomSettings?: (
     settings: MemoryRoomSettings
   ) => Promise<MultiplayerRoomDocument | null>;
+  onToggleReady?: (isReady: boolean) => Promise<void>;
   onStartGame: () => Promise<void>;
   onLeaveRoom: () => Promise<void>;
   onCloseRoom: () => Promise<void>;
@@ -110,12 +114,26 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
   onCreateRoom,
   onJoinRoom,
   onUpdateRoomSettings,
+  onToggleReady,
   onStartGame,
   onLeaveRoom,
   onCloseRoom,
   onClearError,
 }) => {
   const { playClick } = useAudio();
+  const { uid: authUid, profile: authProfile, isSignedInAccount } = useAuth();
+  const [myPersistentRooms, setMyPersistentRooms] = useState<PersistentArcadeRoom[]>([]);
+
+  useEffect(() => {
+    if (!isSignedInAccount || !authUid || room) {
+      setMyPersistentRooms([]);
+      return;
+    }
+    const unsub = subscribeToUserArcadeRooms(authUid, {
+      onData: (items) => setMyPersistentRooms(items),
+    });
+    return () => unsub();
+  }, [isSignedInAccount, authUid, room]);
 
   // Detect invitation code either from hook prop or directly from browser URL
   const initialInvitedCode = (() => {
@@ -512,9 +530,28 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
 
         {/* Joined Players List */}
         <div className="mb-6">
-          <h3 className="font-['Press_Start_2P'] text-[10px] text-[#FFF0D7]/70 uppercase tracking-wider mb-3">
-            Arcade Roster ({joinedCount}/{requiredCount})
-          </h3>
+          {room.lastCompletedRound && (
+            <div
+              className="mb-3 p-3 rounded-xl bg-[#FFC66D]/12 border border-[#FFC66D]/50 text-xs text-[#FFF0D7] flex flex-wrap items-center justify-between gap-2"
+              data-testid="waiting-room-last-round-summary"
+            >
+              <span className="font-semibold text-[#FFC66D]">
+                {room.lastCompletedRound.summaryText}
+              </span>
+              <span className="text-[11px] text-[#FFF0D7]/70">
+                Preparing Round {room.roundNumber ?? room.lastCompletedRound.roundNumber + 1} · New players can join now
+              </span>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <h3 className="font-['Press_Start_2P'] text-[10px] text-[#FFF0D7]/70 uppercase tracking-wider">
+              Arcade Roster ({joinedCount}/{requiredCount}) · {emptySlotsCount} slot{emptySlotsCount === 1 ? '' : 's'} open
+            </h3>
+            <span className="text-[11px] font-semibold text-[#56E0CB]" data-testid="waiting-room-ready-summary">
+              {joinedPlayers.filter((p) => p.isHost || p.isReady !== false).length}/{joinedCount} ready
+            </span>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {joinedPlayers.map((player, index) => {
               const connected = isPlayerEffectivelyConnected(player, nowMs);
@@ -563,13 +600,23 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5 mt-0.5">
+                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                         {player.isHost && (
                           <span className="inline-flex items-center gap-1 text-[10px] text-[#FFC66D] font-semibold">
                             <Crown className="w-3 h-3" />
                             HOST
                           </span>
                         )}
+                        <span
+                          className={`inline-flex items-center gap-1 text-[10px] font-semibold ${
+                            player.isHost || player.isReady !== false
+                              ? 'text-[#56E0CB]'
+                              : 'text-[#FFC66D]/80'
+                          }`}
+                          data-testid={`waiting-player-ready-${index}`}
+                        >
+                          {player.isHost || player.isReady !== false ? '● Ready' : '○ Not Ready'}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -676,31 +723,110 @@ export const MultiplayerLobbyAndWaitingRoom: React.FC<
               </span>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                playClick();
-                void onLeaveRoom();
-              }}
-              disabled={isLoading}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#171329] hover:bg-[#FF776E]/20 border border-[#FFF0D7]/25 text-[#FFF0D7]/80 text-xs font-bold transition-all cursor-pointer"
-              data-testid="guest-leave-room-btn"
-            >
-              <LogOut className="w-4 h-4" />
-              Leave Room
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {onToggleReady && uid && room.players[uid] && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClick();
+                    const currentlyReady = room.players[uid]?.isReady !== false;
+                    void onToggleReady(!currentlyReady);
+                  }}
+                  disabled={isLoading}
+                  data-testid="guest-toggle-ready-btn"
+                  className={`inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                    room.players[uid]?.isReady !== false
+                      ? 'bg-[#56E0CB]/20 border-[#56E0CB] text-[#56E0CB]'
+                      : 'bg-[#FFC66D] border-[#FFC66D] text-[#171329]'
+                  }`}
+                >
+                  {room.players[uid]?.isReady !== false ? 'Ready ✓' : 'Mark Ready'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  playClick();
+                  void onLeaveRoom();
+                }}
+                disabled={isLoading}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#171329] hover:bg-[#FF776E]/20 border border-[#FFF0D7]/25 text-[#FFF0D7]/80 text-xs font-bold transition-all cursor-pointer"
+                data-testid="guest-leave-room-btn"
+              >
+                <LogOut className="w-4 h-4" />
+                Leave Room
+              </button>
+            </div>
           </div>
         )}
       </div>
     );
   }
 
-  // LOBBY ENTRY VIEW (Create or Join Room)
+  // LOBBY ENTRY VIEW (Create or Join Room — Registered users see My Arcade Rooms first)
   return (
     <div
       className="bg-[#292342]/90 border-2 border-[#56E0CB]/30 rounded-2xl p-4 sm:p-6 max-w-xl mx-auto shadow-[0_0_30px_rgba(23,19,41,0.6)]"
       data-testid="multiplayer-lobby-entry"
     >
+      {/* Registered Player: Select Existing Persistent Virtual Arcade Room First */}
+      {isSignedInAccount && authProfile && myPersistentRooms.length > 0 && (
+        <div
+          className="mb-5 p-3.5 rounded-xl bg-[#171329] border border-[#56E0CB]/45 space-y-2.5"
+          data-testid="lobby-my-arcade-rooms"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-['Press_Start_2P'] text-[9px] text-[#56E0CB] uppercase">
+              My Arcade Rooms ({myPersistentRooms.length})
+            </span>
+            <span className="text-[11px] text-[#FFF0D7]/60">Select an existing room</span>
+          </div>
+          <div className="space-y-1.5 max-h-40 overflow-y-auto arcade-scrollbar">
+            {myPersistentRooms.slice(0, 5).map((arcRoom) => (
+              <div
+                key={arcRoom.id}
+                className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-[#201A36] border border-[#3D345F]"
+              >
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-[#FFF0D7] truncate">{arcRoom.name}</p>
+                  <p className="text-[10px] text-[#FFF0D7]/60">
+                    Code {arcRoom.inviteCode} · {arcRoom.memberUids.length} member{arcRoom.memberUids.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+                {arcRoom.activeSessionRoomCode ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClick();
+                      void onJoinRoom({
+                        roomCode: arcRoom.activeSessionRoomCode!,
+                        nickname: authProfile.username,
+                      });
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-[#56E0CB] text-[#171329] text-[11px] font-bold shrink-0 cursor-pointer"
+                  >
+                    Join Active
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playClick();
+                      void onCreateRoom({
+                        nickname: authProfile.username,
+                        memorySettings: memorySettingsDraft,
+                      });
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-[#FFC66D] text-[#171329] text-[11px] font-bold shrink-0 cursor-pointer"
+                  >
+                    Launch {gameTitle}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {/* Create vs Join Toggle */}
       <div className="grid grid-cols-2 gap-2 p-1.5 bg-[#171329] rounded-xl border border-[#FFF0D7]/10 mb-5">
         <button

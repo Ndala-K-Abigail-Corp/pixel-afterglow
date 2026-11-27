@@ -18,6 +18,8 @@ import {
   Edit3,
   Trophy,
   KeyRound,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -74,6 +76,7 @@ export const AuthProfileModal: React.FC<AuthProfileModalProps> = ({
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [confirmPassword, setConfirmPassword] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
   const [username, setUsername] = useState<string>('');
   const [displayName, setDisplayName] = useState<string>('');
   const [countryCode, setCountryCode] = useState<string>('');
@@ -577,21 +580,32 @@ export const AuthProfileModal: React.FC<AuthProfileModalProps> = ({
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-[#FFF0D7]/75 mb-1">
                     Password *
                   </label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Min 8 chars"
-                    data-testid="auth-register-password"
-                    className="w-full px-3 py-2 rounded-xl bg-[#171329] border-2 border-[#3D345F] focus:border-[#56E0CB] focus:shadow-[0_0_0_3px_rgba(86,224,203,0.14)] text-xs sm:text-sm text-[#FFF0D7] outline-none transition-all"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Min 8 chars"
+                      data-testid="auth-register-password"
+                      className="w-full pl-3 pr-9 py-2 rounded-xl bg-[#171329] border-2 border-[#3D345F] focus:border-[#56E0CB] focus:shadow-[0_0_0_3px_rgba(86,224,203,0.14)] text-xs sm:text-sm text-[#FFF0D7] outline-none transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      data-testid="auth-toggle-password-visibility"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#FFF0D7]/60 hover:text-[#56E0CB] cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-[#FFF0D7]/75 mb-1">
                     Confirm Password *
                   </label>
                   <input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Repeat password"
@@ -599,6 +613,22 @@ export const AuthProfileModal: React.FC<AuthProfileModalProps> = ({
                     className="w-full px-3 py-2 rounded-xl bg-[#171329] border-2 border-[#3D345F] focus:border-[#56E0CB] focus:shadow-[0_0_0_3px_rgba(86,224,203,0.14)] text-xs sm:text-sm text-[#FFF0D7] outline-none transition-all"
                   />
                 </div>
+              </div>
+
+              {/* Live Password Criteria Indicator */}
+              <div className="flex flex-wrap items-center gap-3 text-[11px] px-1" aria-live="polite">
+                <span className={password.length >= 8 ? 'text-[#56E0CB] font-semibold' : 'text-[#FFF0D7]/55'}>
+                  {password.length >= 8 ? '✓' : '○'} At least 8 characters
+                </span>
+                <span
+                  className={
+                    confirmPassword.length > 0 && password === confirmPassword
+                      ? 'text-[#56E0CB] font-semibold'
+                      : 'text-[#FFF0D7]/55'
+                  }
+                >
+                  {confirmPassword.length > 0 && password === confirmPassword ? '✓' : '○'} Passwords match
+                </span>
               </div>
 
               <div>

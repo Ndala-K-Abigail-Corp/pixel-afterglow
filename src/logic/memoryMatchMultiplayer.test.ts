@@ -812,11 +812,11 @@ describe('Phase 4 – Multiplayer Memory Match Logic', () => {
           React.createElement(MemoryMatchMultiplayerView, { onBackToHome: vi.fn() })
         );
 
-        // Verify each player's score card and legend entry uses their assigned colour
+        // Verify each player's score card uses their assigned colour (redundant colour legend removed in Phase 2)
+        expect(screen.queryByTestId('mp-memory-color-legend')).toBeNull();
         expectedColors.forEach((hex, idx) => {
           const playerScoreCard = screen.getByTestId(`mp-memory-player-${idx}`);
           expect(playerScoreCard.getAttribute('data-player-color')).toBe(hex);
-          expect(screen.getByTestId(`mp-memory-legend-item-${idx}`)).toBeTruthy();
         });
 
         // Verify both cards of each player's matched pair have the player's colour and visible SVG icon
@@ -1010,7 +1010,7 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
     );
     const playAgainBtn = screen.getByTestId('mp-memory-play-again-btn') as HTMLButtonElement;
     expect(playAgainBtn.disabled).toBe(false);
-    expect(playAgainBtn.textContent).toContain('Play Again');
+    expect(playAgainBtn.textContent).toContain('Return to Waiting Room');
 
     // 2. When host starts Round 2, all connected players automatically transition and see "GET READY – ROUND 2!"
     const round2Room = applyStartMemoryMatchRematch({
@@ -1270,7 +1270,7 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
     expect(afterRound2Timer.memoryMatchState!.flippedCardIds).toEqual([]);
   });
 
-  it('opens directly into Multiplayer Memory Match Join with Code tab when an invitation URL is opened, prefills the room code without auto-joining, and joins when nickname is submitted', () => {
+  it('opens directly into Multiplayer Memory Match Join with Code tab when an invitation URL is opened, prefills the room code without auto-joining, and joins when nickname is submitted', async () => {
     window.scrollTo = vi.fn();
     window.history.replaceState({}, '', '/?game=memory-match&room=NFGNTR');
 
@@ -1301,8 +1301,8 @@ describe('Multiplayer Memory Match – Play Again / Rematch rounds', () => {
 
     const appView = render(React.createElement(App));
 
-    // 1. Opens directly in Memory Match Online Multiplayer Join tab
-    expect(screen.getByTestId('invitation-valid-banner').textContent).toContain(
+    // 1. Opens directly in Memory Match Online Multiplayer Join tab (lazy-loaded game view)
+    expect((await screen.findByTestId('invitation-valid-banner')).textContent).toContain(
       'Invited to Room NFGNTR (1/4 players)'
     );
     const codeInput = screen.getByTestId('input-room-code') as HTMLInputElement;
